@@ -1,0 +1,12 @@
+numpy
+pandas
+av
+opencv-python
+pyyaml
+rerun-sdk
+lerobot==0.4.2
+pyarrow
+datafusion
+pillow
+scipy
+tqdm

@@ -13,6 +13,11 @@ from .video_stream import get_video_stream_samples, pick_video_path
 
 EndEffectorMode = str
 
+CONTROL_JOINT_CMD_PATHS = {
+    "/control/joint_cmd_A",
+    "/control/joint_cmd_B",
+}
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -151,6 +156,14 @@ def _pick_data_columns(columns: list[str], path: str, end_effector: EndEffectorM
         "/joint_states/effort": ["/joint_states/effort:Scalars:scalars"],
         "/joint_states/position": ["/joint_states/position:Scalars:scalars"],
         "/joint_states/velocity": ["/joint_states/velocity:Scalars:scalars"],
+        "/control/joint_cmd_A": [
+            "/control/joint_cmd_A:marvin_msgs.msg.Jointcmd:message",
+            "/control/joint_cmd_A:Scalars:scalars",
+        ],
+        "/control/joint_cmd_B": [
+            "/control/joint_cmd_B:marvin_msgs.msg.Jointcmd:message",
+            "/control/joint_cmd_B:Scalars:scalars",
+        ],
         "/info/eef_left": [
             "/info/eef_left:InstancePoses3D:translations",
             "/info/eef_left:InstancePoses3D:quaternions",
@@ -191,11 +204,25 @@ def _pick_data_columns(columns: list[str], path: str, end_effector: EndEffectorM
     )
 
 
+def _list_dynamic_component_columns(dataset, path: str) -> list[str]:
+    component_columns: list[str] = []
+    for descriptor in dataset.filter_contents([path]).schema().component_columns():
+        column_name = str(descriptor.name)
+        if not column_name.startswith(f"{path}:"):
+            continue
+        if ":Mcap" in column_name:
+            continue
+        component_columns.append(column_name)
+    return component_columns
+
+
 def _state_source_paths(end_effector: EndEffectorMode) -> list[str]:
     base = [
         "/joint_states/effort",
         "/joint_states/position",
         "/joint_states/velocity",
+        "/control/joint_cmd_A",
+        "/control/joint_cmd_B",
         "/info/eef_left",
         "/info/eef_right",
     ]
@@ -217,8 +244,14 @@ def _state_source_paths(end_effector: EndEffectorMode) -> list[str]:
 
 
 def _target_dims(end_effector: EndEffectorMode) -> dict[str, int]:
+    control_dims = {
+        "/control/joint_cmd_A": 7,
+        "/control/joint_cmd_B": 7,
+    }
+
     if end_effector == "hand":
         return {
+            **control_dims,
             "/info/eef_left": 7,
             "/info/eef_right": 7,
             "/hand_left/joint_states/effort": 20,
@@ -228,6 +261,7 @@ def _target_dims(end_effector: EndEffectorMode) -> dict[str, int]:
         }
 
     return {
+        **control_dims,
         "/info/eef_left": 7,
         "/info/eef_right": 7,
         "/info/gripper_feedback_L": 6,
@@ -271,29 +305,129 @@ def _flatten_numeric_values(value) -> list[float]:
         return []
 
 
-def _infer_vector_size_from_columns(df, column_names: list[str]) -> int:
+def _extract_joint_cmd_positions(value) -> list[float]:
+    if value is None:
+        return []
+
+    if isinstance(value, dict):
+        if "positions" in value:
+            return _flatten_numeric_values(value["positions"])
+        if "data" in value:
+            positions = _extract_joint_cmd_positions(value["data"])
+            if positions:
+                return positions
+        for dict_value in value.values():
+            positions = _extract_joint_cmd_positions(dict_value)
+            if positions:
+                return positions
+        return []
+
+    if isinstance(value, np.ndarray):
+        if value.dtype == object:
+            for item in value.tolist():
+                positions = _extract_joint_cmd_positions(item)
+                if positions:
+                    return positions
+            return []
+        return _flatten_numeric_values(value)
+
+    if isinstance(value, (list, tuple)):
+        if value and all(not isinstance(item, (dict, list, tuple, np.ndarray, str)) for item in value):
+            return _flatten_numeric_values(value)
+        for item in value:
+            positions = _extract_joint_cmd_positions(item)
+            if positions:
+                return positions
+        return []
+
+    if isinstance(value, str):
+        positions_match = re.search(r"positions['\"]?\s*[:=]\s*\[([^\]]*)\]", value)
+        if positions_match:
+            return _flatten_numeric_values(positions_match.group(1))
+        return _flatten_numeric_values(value)
+
+    return []
+
+
+def _extract_numeric_values_for_path(path: str, value) -> list[float]:
+    if path in CONTROL_JOINT_CMD_PATHS:
+        positions = _extract_joint_cmd_positions(value)
+        if positions:
+            return positions
+        return []
+
+    return _flatten_numeric_values(value)
+
+
+def _infer_vector_size_from_columns(df, column_names: list[str], path: str) -> int:
     max_size = 0
     for row_values in zip(*(df[column_name] for column_name in column_names), strict=False):
         flat_values: list[float] = []
         for value in row_values:
-            flat_values.extend(_flatten_numeric_values(value))
+            flat_values.extend(_extract_numeric_values_for_path(path, value))
         max_size = max(max_size, len(flat_values))
+
+    if path in CONTROL_JOINT_CMD_PATHS and max_size == 0:
+        raise ValueError(f"Could not parse positions from control joint command topic '{path}'.")
+
     return max(1, max_size)
 
 
-def _build_vectors_from_columns(df, column_names: list[str], vector_size: int) -> np.ndarray:
-    vectors: list[np.ndarray] = []
+def _fill_missing_vectors_with_nearest(
+    vectors: list[np.ndarray | None],
+    vector_size: int,
+    path: str,
+) -> np.ndarray:
+    valid_indices = [index for index, vector in enumerate(vectors) if vector is not None]
+    if not valid_indices:
+        raise ValueError(f"Could not find any valid values to fill control joint command topic '{path}'.")
+
+    valid_index_array = np.asarray(valid_indices, dtype=np.int64)
+    filled_vectors: list[np.ndarray] = []
+
+    for index, vector in enumerate(vectors):
+        if vector is not None:
+            filled_vectors.append(vector)
+            continue
+
+        insertion_index = int(np.searchsorted(valid_index_array, index))
+        candidate_indices: list[int] = []
+
+        if insertion_index > 0:
+            candidate_indices.append(int(valid_index_array[insertion_index - 1]))
+        if insertion_index < len(valid_index_array):
+            candidate_indices.append(int(valid_index_array[insertion_index]))
+
+        nearest_index = min(candidate_indices, key=lambda candidate: (abs(candidate - index), candidate))
+        nearest_vector = vectors[nearest_index]
+        if nearest_vector is None:
+            raise ValueError(f"Nearest fill failed for control joint command topic '{path}' at row {index}.")
+
+        filled_vectors.append(nearest_vector.copy())
+
+    return np.stack(filled_vectors, axis=0)
+
+
+def _build_vectors_from_columns(df, column_names: list[str], vector_size: int, path: str) -> np.ndarray:
+    vectors: list[np.ndarray | None] = []
     for row_values in zip(*(df[column_name] for column_name in column_names), strict=False):
         flat_values: list[float] = []
         for value in row_values:
-            flat_values.extend(_flatten_numeric_values(value))
+            flat_values.extend(_extract_numeric_values_for_path(path, value))
 
         arr = np.array(flat_values, dtype=np.float32)
+        if arr.size == 0 and path in CONTROL_JOINT_CMD_PATHS:
+            vectors.append(None)
+            continue
+
         vec = np.zeros(vector_size, dtype=np.float32)
         if arr.size > 0:
             copy_size = min(arr.size, vector_size)
             vec[:copy_size] = arr[:copy_size]
         vectors.append(vec)
+
+    if path in CONTROL_JOINT_CMD_PATHS:
+        return _fill_missing_vectors_with_nearest(vectors, vector_size=vector_size, path=path)
 
     return np.stack(vectors, axis=0)
 
@@ -417,17 +551,38 @@ def convert_bag_video_to_rrd(
     dataset = client.get_dataset(name="data")
 
     source_paths = _state_source_paths(end_effector)
+    target_dims = _target_dims(end_effector)
 
     path_frames: dict[str, pd.DataFrame] = {}
     joint_columns: dict[str, list[str]] = {}
+    zero_filled_paths: set[str] = set()
 
     for path in source_paths:
+        available_columns = _list_dynamic_component_columns(dataset, path)
+        try:
+            selected_columns = _pick_data_columns(available_columns, path, end_effector=end_effector)
+        except KeyError:
+            if path in CONTROL_JOINT_CMD_PATHS:
+                zero_filled_paths.add(path)
+                print(
+                    f"[WARN] {bag_dir.name}: no dynamic samples for {path}; "
+                    f"filling {target_dims[path]} zeros per frame."
+                )
+                continue
+            raise
+
         path_reader, index_name = _read_with_index_fallback(dataset, [path], video_sample_timestamps)
-        path_df = path_reader.to_arrow_table().to_pandas()
+        path_df = path_reader.select(index_name, *selected_columns).to_arrow_table().to_pandas()
         path_df = _align_reader_dataframe_rows(path_df, video_sample_timestamps, index_name)
 
-        selected_columns = _pick_data_columns(list(path_df.columns), path, end_effector=end_effector)
         if all(path_df[column_name].isnull().all() for column_name in selected_columns):
+            if path in CONTROL_JOINT_CMD_PATHS:
+                zero_filled_paths.add(path)
+                print(
+                    f"[WARN] {bag_dir.name}: aligned samples for {path} are all null; "
+                    f"filling {target_dims[path]} zeros per frame."
+                )
+                continue
             raise ValueError(f"Columns '{selected_columns}' for '{path}' contain only null values.")
 
         path_frames[path] = path_df
@@ -435,18 +590,20 @@ def convert_bag_video_to_rrd(
 
     timestamps = np.asarray(video_sample_timestamps).astype("datetime64[ns]")
 
-    target_dims = _target_dims(end_effector)
-
     joint_values_by_path: dict[str, np.ndarray] = {}
     for path, column_names in joint_columns.items():
         path_df = path_frames[path]
-        inferred_dim = _infer_vector_size_from_columns(path_df, column_names)
+        inferred_dim = _infer_vector_size_from_columns(path_df, column_names, path=path)
         export_dim = max(inferred_dim, target_dims.get(path, inferred_dim))
         joint_values_by_path[path] = _build_vectors_from_columns(
             path_df,
             column_names,
             vector_size=export_dim,
+            path=path,
         )
+
+    for path in zero_filled_paths:
+        joint_values_by_path[path] = np.zeros((len(timestamps), target_dims[path]), dtype=np.float32)
 
     rec = rr.RecordingStream(application_id="joint_states_all_export")
     time_column = rr.TimeColumn("message_log_time", timestamp=timestamps)

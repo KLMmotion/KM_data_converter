@@ -165,6 +165,8 @@ def build_training_data(
         "/joint_states/effort",
         "/joint_states/position",
         "/joint_states/velocity",
+        "/control/joint_cmd_A",
+        "/control/joint_cmd_B",
         *state_paths,
         "/video_stream/**",
     ]
@@ -245,6 +247,46 @@ def _build_state_columns(table: Any, end_effector: EndEffectorMode) -> list[str]
         _pick_first_existing(table, ["/info/gripper_feedback_L:Scalars:scalars"], "gripper_feedback_L"),
         _pick_first_existing(table, ["/info/gripper_feedback_R:Scalars:scalars"], "gripper_feedback_R"),
     ]
+
+
+def _build_action_columns(table: Any) -> list[str]:
+    return [
+        _pick_first_existing(table, ["/joint_states/effort:Scalars:scalars"], "joint_effort"),
+        _pick_first_existing(table, ["/joint_states/position:Scalars:scalars"], "joint_position"),
+        _pick_first_existing(table, ["/joint_states/velocity:Scalars:scalars"], "joint_velocity"),
+        _pick_first_existing(table, ["/control/joint_cmd_A:Scalars:scalars"], "control_joint_cmd_A"),
+        _pick_first_existing(table, ["/control/joint_cmd_B:Scalars:scalars"], "control_joint_cmd_B"),
+    ]
+
+
+def validate_and_build_action_columns(table: Any) -> list[str]:
+    action_columns = _build_action_columns(table)
+    expected_control_dims = {
+        "/control/joint_cmd_A": 7,
+        "/control/joint_cmd_B": 7,
+    }
+
+    observed_control_dims = {
+        path: sum(_infer_column_vector_dim(table, column) for column in action_columns if column.startswith(f"{path}:"))
+        for path in expected_control_dims
+    }
+
+    bad_dims = [
+        path for path, expected_dim in expected_control_dims.items() if observed_control_dims.get(path, 0) != expected_dim
+    ]
+    if bad_dims:
+        debug_samples = {
+            column: _first_non_null_value(table, column)
+            for column in action_columns
+            if any(column.startswith(f"{path}:") for path in bad_dims)
+        }
+        raise ValueError(
+            "Control joint command dimensions do not match expected action schema. "
+            f"Mismatched paths: {bad_dims}. Observed dims: {observed_control_dims}. "
+            f"Sample non-null values: {debug_samples}"
+        )
+
+    return action_columns
 
 
 def validate_and_build_state_columns(table: Any, end_effector: EndEffectorMode) -> list[str]:
@@ -384,16 +426,13 @@ def convert_rrds_to_lerobot(
             if config is None:
                 auto_fps = infer_fps_from_rrd(dataset, raw_segment_id)
                 test_arrow = segment_data.to_arrow_table()
+                action_columns = validate_and_build_action_columns(test_arrow)
                 state_columns = validate_and_build_state_columns(test_arrow, end_effector=end_effector)
 
                 config = LeRobotConversionConfig(
                     fps=auto_fps,
                     index_column="message_log_time",
-                    action=(
-                        "/joint_states/effort:Scalars:scalars,"
-                        "/joint_states/position:Scalars:scalars,"
-                        "/joint_states/velocity:Scalars:scalars"
-                    ),
+                    action=",".join(action_columns),
                     state=",".join(state_columns),
                     task=task_column,
                     videos=videos,

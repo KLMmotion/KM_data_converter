@@ -111,6 +111,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="NAME=VALUE",
         help="Optional joint override. Repeat for multiple joints.",
     )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        type=Path,
+        help="Optional positional path: an input RRD file or a dataset root directory to batch-process.",
+    )
     return parser.parse_args(argv)
 
 
@@ -546,6 +552,50 @@ def augment_rrd_with_urdf(
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
+    # If a positional path is provided, allow shorthand batch processing.
+    if getattr(args, "path", None) is not None:
+        p = args.path
+        if not p.exists():
+            raise FileNotFoundError(f"Path does not exist: {p}")
+
+        # If directory: find video2rrd files and process each (default no-spawn for batch)
+        if p.is_dir():
+            video_dir = p / "datasets" / "video2rrd"
+            if not video_dir.exists():
+                raise FileNotFoundError(f"Expected datasets/video2rrd under: {p}")
+
+            for in_rrd in sorted(video_dir.glob("video2rrd-*.rrd")):
+                out_rrd = in_rrd.with_name(in_rrd.stem + "-urdf.rrd")
+                print(f"Processing {in_rrd} -> {out_rrd}")
+                try:
+                    augment_rrd_with_urdf(
+                        input_rrd=in_rrd,
+                        output_rrd=out_rrd,
+                        xacro_path=args.xacro,
+                        output_urdf=args.output_urdf,
+                        application_id=args.application_id,
+                        spawn=False,
+                        bag_dir=args.bag_dir,
+                        dataset_dir=args.dataset_dir,
+                    )
+                except Exception as e:
+                    print(f"Failed processing {in_rrd}: {e}")
+            return
+
+        # If a file was provided as positional argument, treat it as input_rrd (single-file shorthand)
+        if p.is_file():
+            augment_rrd_with_urdf(
+                input_rrd=p,
+                output_rrd=_resolve_output_rrd_path(p, args.output_rrd),
+                xacro_path=args.xacro,
+                output_urdf=args.output_urdf,
+                application_id=args.application_id,
+                spawn=not args.no_spawn,
+                bag_dir=args.bag_dir,
+                dataset_dir=args.dataset_dir,
+            )
+            return
+
     if args.input_rrd is not None:
         augment_rrd_with_urdf(
             input_rrd=args.input_rrd,
