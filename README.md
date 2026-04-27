@@ -2,7 +2,7 @@
 
 Convert raw recordings in BAG_STORAGE into a LeRobot dataset.
 
-The pipeline has four stages: split the 2x2 camera video, export MCAP to RRD, align video with robot state and write a new RRD, then export the final LeRobot dataset.
+The main pipeline has four stages: split the 2x2 camera video, export MCAP to RRD, align video with robot state and write a new RRD, then export the final LeRobot dataset. You can also optionally augment a generated video2rrd file with the robot URDF and aligned joint transforms.
 
 ## Input Layout
 
@@ -139,6 +139,28 @@ python -m km_data_converter video-to-rrd ^
 
 This step writes video streams into RRD and aligns them with robot state.
 
+Add URDF to an existing video2rrd file:
+
+```powershell
+python -m km_data_converter.urdf ^
+  --input-rrd .\datasets\video2rrd\video2rrd-yy-MM-dd-HH-mm-ss.rrd
+```
+
+`km_data_converter.urdf` behavior:
+
+- If `--input-rrd` is provided, the command generates a new RRD that contains the original video2rrd data plus the expanded URDF and aligned joint transforms.
+- If `--output-rrd` is omitted, the output is written next to `--input-rrd` as `video2rrd-yy-MM-dd-HH-mm-ss-with-urdf.rrd`.
+- If `--bag-dir` or `--dataset-dir` is omitted, both are inferred from the input RRD path.
+- If `--input-rrd` is omitted, the command only expands and visualizes the URDF in Rerun and does not write a merged RRD.
+
+Common example with explicit output path:
+
+```powershell
+python -m km_data_converter.urdf ^
+  --input-rrd .\datasets\video2rrd\video2rrd-yy-MM-dd-HH-mm-ss.rrd ^
+  --output-rrd .\datasets\video2rrd\video2rrd-yy-MM-dd-HH-mm-ss-with-urdf.rrd
+```
+
 Export LeRobot:
 
 ```powershell
@@ -180,26 +202,31 @@ This step converts the RRD files into LeRobot format.
 - `python -m km_data_converter split-video`: split cameras.mp4 into four camera videos
 - `python -m km_data_converter mcap-to-rrd`: export one mcap2rrd.rrd per episode
 - `python -m km_data_converter video-to-rrd`: align video and robot state into video2rrd-yy-MM-dd-HH-mm-ss.rrd
+- `python -m km_data_converter.urdf --input-rrd <video2rrd_file>`: generate a new RRD with URDF content and aligned joint transforms
 - `python -m km_data_converter rrd-to-lerobot`: merge multiple RRD files into one LeRobot dataset
 
 ## Action Definition
 
-The action vector has 42 dimensions and is built from joint_states in a fixed order:
+The action vector has 56 dimensions and is built in a fixed order from joint_states plus control joint commands:
 
 - Dimensions 0-13: /joint_states/effort
 - Dimensions 14-27: /joint_states/position
 - Dimensions 28-41: /joint_states/velocity
+- Dimensions 42-48: /control/joint_cmd_A
+- Dimensions 49-55: /control/joint_cmd_B
 
 Meaning:
 
 - 0-13: joint effort
 - 14-27: joint position
 - 28-41: joint velocity
+- 42-48: left-side control joint command
+- 49-55: right-side control joint command
 
 Layout:
 
 ```text
-action = [effort(14), position(14), velocity(14)]
+action = [effort(14), position(14), velocity(14), control_joint_cmd_A(7), control_joint_cmd_B(7)]
 ```
 
 Left/right split:
@@ -210,11 +237,13 @@ Left/right split:
 - Dimensions 21-27: Joint_R position
 - Dimensions 28-34: Joint_L velocity
 - Dimensions 35-41: Joint_R velocity
+- Dimensions 42-48: Joint_L control
+- Dimensions 49-55: Joint_R control
 
 Equivalent view:
 
 ```text
-action = [Joint_L effort(7), Joint_R effort(7), Joint_L position(7), Joint_R position(7), Joint_L velocity(7), Joint_R velocity(7)]
+action = [Joint_L effort(7), Joint_R effort(7), Joint_L position(7), Joint_R position(7), Joint_L velocity(7), Joint_R velocity(7), Joint_L control(7), Joint_R control(7)]
 ```
 
 ## Observation.state Definition
@@ -249,6 +278,7 @@ Field order:
 - Each episode directory must start with my_bag-yy-MM-dd-HH-mm-ss
 - video_to_rrd.py requires all four split video files to exist
 - video_to_rrd.py also writes aligned sensor dashboard videos to each episode's video folder as sensor_0_dashboard.mp4 and sensor_1_dashboard.mp4
+- python -m km_data_converter.urdf writes a `*-with-urdf.rrd` file when `--input-rrd` is provided
 - rrd_to_lerobot.py expects state dimensions of eef_left=7, eef_right=7, gripper_L=6, gripper_R=6
 - By default the scripts skip bad episodes and continue; with --strict they stop on the first error
 - Save any RRD data you need in time. Converting new data can overwrite older files under datasets.
