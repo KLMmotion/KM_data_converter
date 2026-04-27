@@ -182,24 +182,49 @@ This step converts the RRD files into LeRobot format.
 - `python -m km_data_converter video-to-rrd`: align video and robot state into video2rrd-yy-MM-dd-HH-mm-ss.rrd
 - `python -m km_data_converter rrd-to-lerobot`: merge multiple RRD files into one LeRobot dataset
 
+## Add URDF To RRD
+
+If you want to augment an existing video2rrd file with the Marvin URDF and aligned joint transforms, run:
+
+```powershell
+python -m km_data_converter.urdf ^
+  --input-rrd .\datasets\video2rrd\video2rrd-yy-MM-dd-HH-mm-ss.rrd ^
+  --output-rrd .\datasets\video2rrd\video2rrd-yy-MM-dd-HH-mm-ss-with-urdf.rrd ^
+  --no-spawn
+```
+
+Common behavior:
+
+- `--input-rrd`: existing `video2rrd` file to augment
+- `--output-rrd`: output RRD path; if omitted, a `-with-urdf.rrd` file is created next to the input file
+- `--xacro`: optional path to the source xacro file; defaults to the Marvin M6 model in this repository
+- `--output-urdf`: optional path for the expanded URDF file written before logging into Rerun
+- `--no-spawn`: do not open a Rerun viewer automatically
+
+This command converts a regular `video2rrd` file into a new RRD that also contains the expanded URDF plus aligned robot joint transforms.
+
 ## Action Definition
 
-The action vector has 42 dimensions and is built from joint_states in a fixed order:
+The action vector has 56 dimensions and is built in a fixed order:
 
 - Dimensions 0-13: /joint_states/effort
 - Dimensions 14-27: /joint_states/position
 - Dimensions 28-41: /joint_states/velocity
+- Dimensions 42-48: /control/joint_cmd_A
+- Dimensions 49-55: /control/joint_cmd_B
 
 Meaning:
 
 - 0-13: joint effort
 - 14-27: joint position
 - 28-41: joint velocity
+- 42-48: left arm control command
+- 49-55: right arm control command
 
 Layout:
 
 ```text
-action = [effort(14), position(14), velocity(14)]
+action = [effort(14), position(14), velocity(14), control_A(7), control_B(7)]
 ```
 
 Left/right split:
@@ -210,11 +235,13 @@ Left/right split:
 - Dimensions 21-27: Joint_R position
 - Dimensions 28-34: Joint_L velocity
 - Dimensions 35-41: Joint_R velocity
+- Dimensions 42-48: Joint_L control
+- Dimensions 49-55: Joint_R control
 
 Equivalent view:
 
 ```text
-action = [Joint_L effort(7), Joint_R effort(7), Joint_L position(7), Joint_R position(7), Joint_L velocity(7), Joint_R velocity(7)]
+action = [Joint_L effort(7), Joint_R effort(7), Joint_L position(7), Joint_R position(7), Joint_L velocity(7), Joint_R velocity(7), Joint_L control(7), Joint_R control(7)]
 ```
 
 ## Observation.state Definition
@@ -250,6 +277,7 @@ Field order:
 - video_to_rrd.py requires all four split video files to exist
 - video_to_rrd.py also writes aligned sensor dashboard videos to each episode's video folder as sensor_0_dashboard.mp4 and sensor_1_dashboard.mp4
 - rrd_to_lerobot.py expects state dimensions of eef_left=7, eef_right=7, gripper_L=6, gripper_R=6
+- rrd_to_lerobot.py expects control dimensions of joint_cmd_A=7 and joint_cmd_B=7 in the action vector
 - By default the scripts skip bad episodes and continue; with --strict they stop on the first error
 - Save any RRD data you need in time. Converting new data can overwrite older files under datasets.
 - Before converting new data, delete the old recordings in BAG_STORAGE.
