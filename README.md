@@ -248,6 +248,7 @@ Field order:
 
 - Each episode directory must start with my_bag-yy-MM-dd-HH-mm-ss
 - video_to_rrd.py requires all four split video files to exist
+- video_to_rrd.py also writes aligned sensor dashboard videos to each episode's video folder as sensor_0_dashboard.mp4 and sensor_1_dashboard.mp4
 - rrd_to_lerobot.py expects state dimensions of eef_left=7, eef_right=7, gripper_L=6, gripper_R=6
 - By default the scripts skip bad episodes and continue; with --strict they stop on the first error
 - Save any RRD data you need in time. Converting new data can overwrite older files under datasets.
