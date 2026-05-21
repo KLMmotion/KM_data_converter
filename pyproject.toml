@@ -14,6 +14,7 @@ dependencies = [
   "av",
   "opencv-python",
   "pyyaml",
+  "mcap",
   "rerun-sdk",
   "lerobot==0.4.2",
   "pyarrow",
@@ -27,9 +28,12 @@ dependencies = [
 km-data-converter = "km_data_converter.__main__:main"
 
 [tool.setuptools]
-include-package-data = false
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["km_data_converter*"]
+include = ["km_data_converter*", "km_data_quality_check*"]
 exclude = ["datasets*", "BAG_STORAGE*", "examples*", "__pycache__*"]
+
+[tool.setuptools.package-data]
+km_data_quality_check = ["*.yaml"]

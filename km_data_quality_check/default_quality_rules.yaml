@@ -1,0 +1,256 @@
+rules:
+  - name: recording_dir_exists
+    scope: file
+    metric: recording_dir_exists
+    operator: "=="
+    threshold: true
+    severity: error
+    enabled: true
+  - name: metadata_yaml_exists
+    scope: file
+    metric: metadata_yaml_exists
+    operator: "=="
+    threshold: true
+    severity: error
+    enabled: true
+  - name: metadata_yaml_non_empty
+    scope: file
+    metric: metadata_yaml_size_bytes
+    operator: ">="
+    threshold: 1
+    severity: error
+    enabled: true
+  - name: ros_data_file_exists
+    scope: file
+    metric: ros_data_file_exists
+    operator: "=="
+    threshold: true
+    severity: error
+    enabled: true
+  - name: ros_data_file_non_empty
+    scope: file
+    metric: ros_data_file_size_bytes
+    operator: ">="
+    threshold: 1
+    severity: error
+    enabled: true
+  - name: cameras_mp4_exists
+    scope: file
+    metric: cameras_mp4_exists
+    operator: "=="
+    threshold: true
+    severity: error
+    enabled: true
+  - name: cameras_mp4_non_empty
+    scope: file
+    metric: cameras_mp4_size_bytes
+    operator: ">="
+    threshold: 1
+    severity: error
+    enabled: true
+
+  - name: recording_duration_sec_min
+    scope: bag
+    metric: recording_duration_sec
+    operator: ">="
+    threshold: 5
+    severity: error
+    enabled: true
+  - name: bag_timestamp_regression_count
+    scope: bag
+    metric: timestamp_regression_count
+    operator: "<="
+    threshold: 0
+    severity: error
+    enabled: true
+  - name: reference_frequency_hz_min
+    scope: bag
+    metric: reference_frequency_hz
+    operator: ">="
+    threshold: 15
+    severity: error
+    enabled: true
+  - name: frame_interval_p99_ms_max
+    scope: bag
+    metric: frame_interval_p99_ms
+    operator: "<="
+    threshold: 100
+    severity: error
+    enabled: true
+  - name: dropped_frame_count_max
+    scope: bag
+    metric: dropped_frame_count
+    operator: "<="
+    threshold: 10
+    severity: error
+    enabled: true
+  - name: message_count_total_min
+    scope: bag
+    metric: message_count_total
+    operator: ">="
+    threshold: 10
+    severity: error
+    enabled: true
+
+  - name: joint_states_exists
+    scope: topic
+    topic_pattern: "^/joint_states$"
+    metric: topic_exists
+    operator: "=="
+    threshold: true
+    severity: error
+    enabled: true
+  - name: joint_states_frequency_hz_min
+    scope: topic
+    topic_pattern: "^/joint_states$"
+    metric: frequency_hz
+    operator: ">="
+    threshold: 50
+    severity: error
+    enabled: true
+  - name: gripper_feedback_exists
+    scope: topic
+    topic_pattern: "^/info/gripper_feedback_[LR]$"
+    metric: topic_exists
+    operator: "=="
+    threshold: true
+    severity: error
+    enabled: true
+  - name: gripper_feedback_frequency_hz_min
+    scope: topic
+    topic_pattern: "^/info/gripper_feedback_[LR]$"
+    metric: frequency_hz
+    operator: ">="
+    threshold: 20
+    severity: error
+    enabled: true
+  - name: critical_topic_max_interval_ms
+    scope: topic
+    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR])$"
+    metric: max_interval_ms
+    operator: "<="
+    threshold: 200
+    severity: error
+    enabled: true
+  - name: critical_topic_message_count_min
+    scope: topic
+    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR])$"
+    metric: message_count
+    operator: ">="
+    threshold: 10
+    severity: error
+    enabled: true
+  - name: critical_topic_timestamp_regression_count
+    scope: topic
+    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR])$"
+    metric: timestamp_regression_count
+    operator: "<="
+    threshold: 0
+    severity: error
+    enabled: true
+
+  - name: video_can_open
+    scope: video
+    metric: opened
+    operator: "=="
+    threshold: true
+    severity: error
+    enabled: true
+  - name: video_fps_min
+    scope: video
+    metric: fps
+    operator: ">="
+    threshold: 10
+    severity: warning
+    enabled: true
+  - name: video_duration_sec_min
+    scope: video
+    metric: duration_sec
+    operator: ">="
+    threshold: 5
+    severity: error
+    enabled: true
+  - name: video_frame_count_min
+    scope: video
+    metric: frame_count
+    operator: ">="
+    threshold: 50
+    severity: error
+    enabled: true
+  - name: video_blur_score_min
+    scope: video
+    metric: blur_score
+    operator: ">="
+    threshold: 40
+    severity: warning
+    enabled: true
+  - name: video_exposure_abnormal_ratio_max
+    scope: video
+    metric: exposure_abnormal_ratio
+    operator: "<="
+    threshold: 0.2
+    severity: warning
+    enabled: true
+  - name: left_eye_not_black
+    scope: video
+    topic_pattern: "^left_eye$"
+    metric: is_black_screen
+    operator: "=="
+    threshold: false
+    severity: error
+    enabled: true
+  - name: right_eye_not_black
+    scope: video
+    topic_pattern: "^right_eye$"
+    metric: is_black_screen
+    operator: "=="
+    threshold: false
+    severity: error
+    enabled: true
+  - name: left_wrist_not_black
+    scope: video
+    topic_pattern: "^left_wrist$"
+    metric: is_black_screen
+    operator: "=="
+    threshold: false
+    severity: error
+    enabled: true
+  - name: right_wrist_not_black
+    scope: video
+    topic_pattern: "^right_wrist$"
+    metric: is_black_screen
+    operator: "=="
+    threshold: false
+    severity: error
+    enabled: true
+
+  - name: video_bag_overlap_ratio_min
+    scope: alignment
+    metric: overlap_ratio
+    operator: ">="
+    threshold: 0.8
+    severity: error
+    enabled: true
+  - name: video_bag_duration_diff_abs_sec_max
+    scope: alignment
+    metric: duration_diff_abs_sec
+    operator: "<="
+    threshold: 2.0
+    severity: error
+    enabled: true
+  - name: sync_error_p99_ms_max
+    scope: alignment
+    topic_pattern: "^/info/gripper_feedback_[LR]$"
+    metric: sync_error_p99_ms
+    operator: "<="
+    threshold: 100
+    severity: error
+    enabled: true
+  - name: sync_error_max_ms_max
+    scope: alignment
+    topic_pattern: "^/info/gripper_feedback_[LR]$"
+    metric: sync_error_max_ms
+    operator: "<="
+    threshold: 200
+    severity: error
+    enabled: true

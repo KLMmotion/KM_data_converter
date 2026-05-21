@@ -4,6 +4,7 @@ import sys
 from collections.abc import Callable
 
 from . import mcap_to_rrd, pipeline, rrd_to_lerobot, split_video, video_to_rrd
+from km_data_quality_check import cli as quality_check
 
 Command = Callable[[list[str] | None], None]
 
@@ -20,6 +21,7 @@ def _print_help() -> None:
     print("  mcap-to-rrd    Export MCAP files to per-episode RRD")
     print("  video-to-rrd   Merge split videos with robot state into RRD")
     print("  rrd-to-lerobot Export video2rrd files to a LeRobot dataset")
+    print("  quality-check  Check raw recordings before conversion")
     print("")
     print("Use -h/--help after a command for command-specific options.")
 
@@ -33,6 +35,7 @@ def main(argv: list[str] | None = None) -> None:
         "mcap-to-rrd": mcap_to_rrd.main,
         "video-to-rrd": video_to_rrd.main,
         "rrd-to-lerobot": rrd_to_lerobot.main,
+        "quality-check": quality_check.main,
     }
 
     if not args or args[0] in {"-h", "--help"}:

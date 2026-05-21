@@ -214,6 +214,7 @@ def remux_video_stream(
     *,
     output_path: str,
     video_format: str,
+    target_fps: int | None = None,
     width: int | None = None,
     height: int | None = None,
 ) -> None:
@@ -229,6 +230,7 @@ def remux_video_stream(
         times_ns: Timestamps in nanoseconds for each packet
         output_path: Path to write output video file
         video_format: Source codec format (e.g., "h264", "hevc")
+        target_fps: Constant output FPS. When provided, packet timestamps are written as CFR.
         width: Video frame width (auto-detected if None)
         height: Video frame height (auto-detected if None)
 
@@ -262,8 +264,10 @@ def remux_video_stream(
     output_stream.width = width
     output_stream.height = height
 
-    # Set time base to nanosecond precision
-    time_base = Fraction(1, 1_000_000_000)
+    if target_fps is not None and target_fps <= 0:
+        raise ValueError(f"target_fps must be positive, got {target_fps}.")
+
+    time_base = Fraction(1, target_fps) if target_fps is not None else Fraction(1, 1_000_000_000)
     output_stream.time_base = time_base
 
     # Remux packets with proper timestamps
@@ -272,10 +276,14 @@ def remux_video_stream(
         if packet_idx >= len(times_ns):
             break
 
-        # Set timestamps from RRD data
         packet.time_base = time_base
-        packet.pts = int(times_ns[packet_idx])
-        packet.dts = packet.pts
+        if target_fps is not None:
+            packet.pts = packet_idx
+            packet.dts = packet_idx
+            packet.duration = 1
+        else:
+            packet.pts = int(times_ns[packet_idx])
+            packet.dts = packet.pts
         packet.stream = output_stream
 
         output_container.mux(packet)

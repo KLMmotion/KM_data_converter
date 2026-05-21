@@ -266,6 +266,15 @@ def main(argv: list[str] | None = None) -> None:
         end_effector=args.end_effector,
         task_description=args.task_description,
     )
+
+    from .recompute_stats import DEFAULT_SAMPLE_RATIO, recompute_image_stats_file
+
+    recompute_image_stats_file(
+        dataset_root=lerobot_output,
+        sample_ratio=DEFAULT_SAMPLE_RATIO,
+        output=lerobot_output / "meta" / "stats.json",
+        verbose=False,
+    )
     print(f"[4/4] Done. Episodes={episodes}, output={lerobot_output}")
 
 

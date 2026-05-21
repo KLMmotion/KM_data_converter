@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 1180px;
+  min-height: 100vh;
+  background: #06101f;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+select option {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.console-scroll {
+  scrollbar-color: rgba(125, 211, 252, 0.45) rgba(15, 23, 42, 0.45);
+  scrollbar-width: thin;
+}
+
+.console-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.console-scroll::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.console-scroll::-webkit-scrollbar-thumb {
+  background: rgba(125, 211, 252, 0.45);
+  border-radius: 999px;
+}

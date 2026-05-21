@@ -1,2 +1,0 @@
-[console_scripts]
-km-data-converter = km_data_converter.__main__:main
