@@ -31,6 +31,7 @@ Python 3.10 to 3.12 is recommended.
 
 ```powershell
 pip install -e .
+pip install rerun-sdk[all]
 pip install -e .\examples\python\rerun_export
 ```
 
@@ -39,6 +40,18 @@ If your environment is still missing dependencies, install them as well:
 ```powershell
 pip install opencv-python pyyaml
 ```
+
+## Launch UI
+
+The Electron UI provides a desktop window for running the full conversion workflow.
+
+```powershell
+cd .\km_data_converter_UI
+npm install
+npm run dev
+```
+
+Use the UI to select the `BAG_STORAGE` source directory, choose an output directory, set FPS, task text, and advanced options, then start the full pipeline. The window also shows conversion progress, live logs, the final dataset path, and a button to open the converted dataset in Rerun.
 
 ## Run Everything
 
@@ -297,7 +310,13 @@ The final LeRobot dataset usually contains data, meta, and videos.
 
 The converted LeRobot dataset can also be visualized in Rerun.
 
-Install Rerun first, then open a terminal in datasets\lerobot_output and run:
+Install Rerun first:
+
+```powershell
+pip install rerun-sdk[all]
+```
+
+Then open a terminal in datasets\lerobot_output and run:
 
 ```powershell
 rerun .\lerobot_datasets-yy-MM-dd-HH-mm-ss\
