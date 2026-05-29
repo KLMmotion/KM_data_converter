@@ -55,7 +55,7 @@ def get_video_stream_samples(video_path: Path) -> tuple[str, list[bytes], np.nda
                 frame = frame.reformat(format="yuv420p")
 
             # frame.pts = encode_index
-            t_ns = frame.pts * frame.time_base * 1e9 + 1e8
+            t_ns = frame.pts * frame.time_base * 1e9
             frame.time_base = codec.time_base
             # encode_index += 1
 
