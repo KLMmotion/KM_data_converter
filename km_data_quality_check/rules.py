@@ -23,7 +23,7 @@ class QualityRule:
     suggestion: str | None = None
 
 
-def load_rules(rules_path: Path | None = None) -> list[QualityRule]:
+def load_rules(rules_path: Path | None = None, merge_defaults: bool = True) -> list[QualityRule]:
     default_path = files("km_data_quality_check").joinpath("default_quality_rules.yaml")
     with default_path.open("r", encoding="utf-8") as file:
         default_config = yaml.safe_load(file) or {}
@@ -32,7 +32,8 @@ def load_rules(rules_path: Path | None = None) -> list[QualityRule]:
     if rules_path is not None:
         with rules_path.open("r", encoding="utf-8") as file:
             user_config = yaml.safe_load(file) or {}
-        rules = _merge_rules(rules, list(user_config.get("rules", [])))
+        user_rules = list(user_config.get("rules", []))
+        rules = _merge_rules(rules, user_rules) if merge_defaults else user_rules
 
     return [_to_rule(item) for item in rules]
 
@@ -93,10 +94,10 @@ def make_check(
 
 def _merge_rules(default_rules: list[dict[str, Any]], user_rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged = [dict(rule) for rule in default_rules]
-    indexes = {str(rule.get("name")): index for index, rule in enumerate(merged)}
+    indexes = {str(_field(rule, "name", "rule_name")): index for index, rule in enumerate(merged)}
 
     for user_rule in user_rules:
-        name = str(user_rule.get("name", ""))
+        name = str(_field(user_rule, "name", "rule_name", default=""))
         if name in indexes:
             updated = dict(merged[indexes[name]])
             updated.update(user_rule)
@@ -107,13 +108,14 @@ def _merge_rules(default_rules: list[dict[str, Any]], user_rules: list[dict[str,
 
 
 def _to_rule(item: dict[str, Any]) -> QualityRule:
+    severity = str(item.get("severity", "error"))
     return QualityRule(
-        name=str(item["name"]),
+        name=str(_field(item, "name", "rule_name")),
         scope=str(item["scope"]),
-        metric=str(item["metric"]),
+        metric=str(_field(item, "metric", "check_item")),
         operator=str(item["operator"]),
         threshold=item.get("threshold"),
-        severity=str(item.get("severity", "error")),
+        severity="warning" if severity == "warning" else "error",
         topic_pattern=item.get("topic_pattern"),
         enabled=bool(item.get("enabled", True)),
         message=item.get("message"),
@@ -128,6 +130,8 @@ def _compare(value: Any, operator: str, threshold: Any) -> bool:
         return not bool(value)
     if operator == "==":
         return value == threshold
+    if operator == "!=":
+        return value != threshold
 
     try:
         left = float(value)
@@ -137,9 +141,23 @@ def _compare(value: Any, operator: str, threshold: Any) -> bool:
 
     if operator == ">=":
         return left >= right
+    if operator == ">":
+        return left > right
     if operator == "<=":
         return left <= right
+    if operator == "<":
+        return left < right
     raise ValueError(f"Unsupported quality rule operator: {operator}")
+
+
+def _field(item: dict[str, Any], primary: str, fallback: str, default: Any = None) -> Any:
+    if primary in item:
+        return item[primary]
+    if fallback in item:
+        return item[fallback]
+    if default is not None:
+        return default
+    raise KeyError(primary)
 
 
 def _default_message(rule: QualityRule, target: str, value: Any, passed: bool) -> str:

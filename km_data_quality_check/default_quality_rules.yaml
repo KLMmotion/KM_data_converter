@@ -67,7 +67,7 @@ rules:
     scope: bag
     metric: reference_frequency_hz
     operator: ">="
-    threshold: 15
+    threshold: 50
     severity: error
     enabled: true
   - name: frame_interval_p99_ms_max
@@ -81,8 +81,8 @@ rules:
     scope: bag
     metric: dropped_frame_count
     operator: "<="
-    threshold: 10
-    severity: error
+    threshold: 50
+    severity: warning
     enabled: true
   - name: message_count_total_min
     scope: bag
@@ -126,7 +126,7 @@ rules:
     enabled: true
   - name: critical_topic_max_interval_ms
     scope: topic
-    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR])$"
+    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR]|/info/eef_(left|right))$"
     metric: max_interval_ms
     operator: "<="
     threshold: 200
@@ -134,7 +134,7 @@ rules:
     enabled: true
   - name: critical_topic_message_count_min
     scope: topic
-    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR])$"
+    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR]|/info/eef_(left|right))$"
     metric: message_count
     operator: ">="
     threshold: 10
@@ -142,7 +142,7 @@ rules:
     enabled: true
   - name: critical_topic_timestamp_regression_count
     scope: topic
-    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR])$"
+    topic_pattern: "^(/joint_states|/info/gripper_feedback_[LR]|/info/eef_(left|right))$"
     metric: timestamp_regression_count
     operator: "<="
     threshold: 0

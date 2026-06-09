@@ -28,6 +28,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Optional YAML file that overrides or appends quality rules by rule name.",
     )
+    parser.add_argument(
+        "--required-topic",
+        action="append",
+        default=None,
+        help="Required topic to include in topic existence checks. Can be passed multiple times.",
+    )
+    parser.add_argument(
+        "--replace-rules",
+        action="store_true",
+        help="Use --rules as the complete rule set instead of merging with default rules.",
+    )
     return parser.parse_args(argv)
 
 
@@ -40,12 +51,21 @@ def _resolve_report_output_dir(output_root: Path) -> Path:
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     output_dir = _resolve_report_output_dir(args.output)
-    summary = run_quality_check(input_dir=args.input, output_dir=output_dir, rules_path=args.rules)
+    summary = run_quality_check(
+        input_dir=args.input,
+        output_dir=output_dir,
+        rules_path=args.rules,
+        required_topics=args.required_topic,
+        merge_default_rules=not args.replace_rules,
+    )
     counts = summary["status_counts"]
+    error_count = sum(item.get("error_count", 0) for item in summary["recordings"])
+    warning_count = sum(item.get("warning_count", 0) for item in summary["recordings"])
     print(
         "[DONE] Raw quality check complete. "
         f"recordings={summary['recording_count']}, "
         f"passed={counts['passed']}, warning={counts['warning']}, failed={counts['failed']}, "
+        f"error_checks={error_count}, warning_checks={warning_count}, "
         f"output={output_dir}"
     )
 

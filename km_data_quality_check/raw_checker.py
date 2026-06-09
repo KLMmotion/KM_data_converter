@@ -15,17 +15,27 @@ REQUIRED_TOPICS = [
     "/joint_states",
     "/info/gripper_feedback_L",
     "/info/gripper_feedback_R",
+    "/info/eef_left",
+    "/info/eef_right",
+    "/control/joint_cmd_A",
+    "/control/joint_cmd_B",
 ]
 
 
-def run_quality_check(input_dir: Path, output_dir: Path, rules_path: Path | None = None) -> dict[str, Any]:
-    rules = enabled_rules(load_rules(rules_path))
+def run_quality_check(
+    input_dir: Path,
+    output_dir: Path,
+    rules_path: Path | None = None,
+    required_topics: list[str] | None = None,
+    merge_default_rules: bool = True,
+) -> dict[str, Any]:
+    rules = enabled_rules(load_rules(rules_path, merge_defaults=merge_default_rules))
     bag_dirs = _list_recordings(input_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     reports: list[dict[str, Any]] = []
     for bag_dir in bag_dirs:
-        report = check_recording(bag_dir, rules)
+        report = check_recording(bag_dir, rules, required_topics=required_topics)
         write_recording_report(report, output_dir / bag_dir.name)
         reports.append(report)
 
@@ -34,7 +44,11 @@ def run_quality_check(input_dir: Path, output_dir: Path, rules_path: Path | None
     return summary
 
 
-def check_recording(bag_dir: Path, rules: list[QualityRule]) -> dict[str, Any]:
+def check_recording(
+    bag_dir: Path,
+    rules: list[QualityRule],
+    required_topics: list[str] | None = None,
+) -> dict[str, Any]:
     created_at = datetime.now(timezone.utc).isoformat()
     checks: list[dict[str, Any]] = []
     metrics: dict[str, Any] = {
@@ -73,7 +87,7 @@ def check_recording(bag_dir: Path, rules: list[QualityRule]) -> dict[str, Any]:
             )
         )
 
-    for topic in REQUIRED_TOPICS:
+    for topic in required_topics if required_topics is not None else REQUIRED_TOPICS:
         if topic not in metrics["topics"]:
             metrics["topics"][topic] = compute_topic_metrics([])
 

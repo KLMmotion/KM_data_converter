@@ -44,11 +44,14 @@ def split_cameras_video(video_path: Path, target_fps: float = 10.0) -> bool:
     half_h = height // 2
 
     out_dir = video_path.parent
+    # Source cameras.mp4 layout:
+    #   left_eye      left_wrist
+    #   right_wrist   right_eye
     outputs = {
         "left_eye.mp4": (slice(0, half_h), slice(0, half_w)),
-        "right_eye.mp4": (slice(0, half_h), slice(half_w, width)),
-        "left_wrist.mp4": (slice(half_h, height), slice(0, half_w)),
-        "right_wrist.mp4": (slice(half_h, height), slice(half_w, width)),
+        "left_wrist.mp4": (slice(0, half_h), slice(half_w, width)),
+        "right_wrist.mp4": (slice(half_h, height), slice(0, half_w)),
+        "right_eye.mp4": (slice(half_h, height), slice(half_w, width)),
     }
     # crop_margins = {
     #     "left_eye.mp4": {"top": 0.30, "bottom": 0.30, "left": 0.28, "right": 0.28},

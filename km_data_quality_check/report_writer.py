@@ -33,7 +33,7 @@ def _recording_markdown(report: dict[str, Any]) -> str:
         "",
     ]
 
-    findings = [check for check in report["checks"] if check["status"] in {"warning", "error"}]
+    findings = [check for check in report["checks"] if check["status"] != "pass"]
     if findings:
         lines.extend(_checks_table(findings))
     else:
@@ -76,7 +76,15 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(_dict_table(summary["status_counts"]))
-    lines.extend(["", "## Recordings", "", "| recording | status | errors | warnings |", "| --- | --- | ---: | ---: |"])
+    lines.extend(
+        [
+            "",
+            "## Recordings",
+            "",
+            "| recording | status | errors | warnings |",
+            "| --- | --- | ---: | ---: |",
+        ]
+    )
     for item in summary["recordings"]:
         lines.append(
             f"| `{item['recording_name']}` | {item['overall_status']} | "
