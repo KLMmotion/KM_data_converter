@@ -6,8 +6,8 @@
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"npm:dev:electron\"",
-    "dev:electron": "wait-on tcp:5173 && npm run build:electron && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node scripts/launch-electron.cjs",
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5174 --strictPort\" \"npm:dev:electron\"",
+    "dev:electron": "wait-on tcp:5174 && npm run build:electron && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5174 node scripts/launch-electron.cjs",
     "build": "tsc --noEmit && vite build && npm run build:electron",
     "build:electron": "esbuild ./electron/main.ts ./electron/preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --out-extension:.js=.cjs --external:electron",
     "preview": "vite preview --host 127.0.0.1",
