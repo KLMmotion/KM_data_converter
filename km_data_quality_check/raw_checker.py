@@ -87,7 +87,8 @@ def check_recording(
             )
         )
 
-    for topic in required_topics if required_topics is not None else REQUIRED_TOPICS:
+    active_required_topics = required_topics if required_topics is not None else REQUIRED_TOPICS
+    for topic in active_required_topics:
         if topic not in metrics["topics"]:
             metrics["topics"][topic] = compute_topic_metrics([])
 
@@ -112,6 +113,7 @@ def check_recording(
     _fill_sync_metrics(metrics["alignment"], topic_timestamps, timestamps_source)
 
     checks.extend(_evaluate_rules(rules, metrics))
+    checks.extend(_required_topic_existence_checks(active_required_topics, metrics["topics"], checks))
     checks.extend(_reader_warning_checks(reader_warnings))
     checks.extend(_alignment_availability_checks(metrics["alignment"]))
 
@@ -182,6 +184,42 @@ def _evaluate_rules(rules: list[QualityRule], metrics: dict[str, Any]) -> list[d
                         checks.append(evaluate_rule(rule, topic, value))
             else:
                 checks.append(evaluate_rule(rule, "video_vs_bag", metrics["alignment"].get(rule.metric)))
+    return checks
+
+
+def _required_topic_existence_checks(
+    required_topics: list[str],
+    topic_metrics: dict[str, Any],
+    existing_checks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    existing_topic_exists_errors = {
+        check["target"]
+        for check in existing_checks
+        if check.get("scope") == "topic"
+        and check.get("metric") == "topic_exists"
+        and check.get("status") == "error"
+    }
+
+    for topic in required_topics:
+        if topic in existing_topic_exists_errors:
+            continue
+        exists = bool(topic_metrics.get(topic, {}).get("topic_exists"))
+        if exists:
+            continue
+        checks.append(
+            make_check(
+                "required_topic_exists",
+                "topic",
+                topic,
+                "topic_exists",
+                exists,
+                True,
+                "error",
+                f"Required topic {topic} is missing from this recording.",
+                "Check the publisher, recorder topic list, and recording launch configuration.",
+            )
+        )
     return checks
 
 

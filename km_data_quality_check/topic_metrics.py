@@ -60,9 +60,13 @@ def compute_interval_summary(timestamps_ns: Sequence[int]) -> dict[str, Any]:
         }
 
     sorted_values = np.sort(np.asarray(values, dtype=np.int64))
+    duration_sec = float((sorted_values[-1] - sorted_values[0]) / 1_000_000_000)
+    frequency_hz = float((len(values) - 1) / duration_sec) if duration_sec > 0 else 0.0
     intervals_ms = np.diff(sorted_values).astype(np.float64) / 1_000_000.0
     median_ms = _percentile(intervals_ms, 50)
-    drop_threshold_ms = max(25.0, float(median_ms or 0.0) * 2.5)
+    expected_interval_ms = 1000.0 / frequency_hz if frequency_hz > 0 else 0.0
+    drop_threshold_ms = expected_interval_ms * 2
+    # drop_threshold_ms = max(25.0, float(median_ms or 0.0) * 2.5)
 
     return {
         "frame_interval_median_ms": median_ms,
