@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Node / Electron / Vite
+node_modules/
+dist/
+dist-electron/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Generated conversion outputs and local datasets
+.generated/
+generated/
+datasets/
+BAG_STORAGE/
+*.rrd
+*.mcap
+
+# OS / editor noise
+.DS_Store
+._*
+Thumbs.db
+.vscode/
+
+# Local environment files
+.env
+.env.*
+!.env.example

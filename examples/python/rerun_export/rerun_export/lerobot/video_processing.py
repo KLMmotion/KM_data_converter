@@ -172,7 +172,7 @@ def decode_video_frame(
 def can_remux_video(
     times_ns: npt.NDArray[np.int64],
     target_fps: int,
-    tolerance: float = 0.05,
+    tolerance: float = 0.1,
 ) -> tuple[bool, float]:
     """
     Check if video can be remuxed without re-encoding.
@@ -183,7 +183,7 @@ def can_remux_video(
     Args:
         times_ns: Timestamps in nanoseconds for each packet
         target_fps: Target frames per second
-        tolerance: Allowed relative difference (default 5%)
+        tolerance: Allowed relative difference (default 10%)
 
     Returns:
         Tuple of (can_remux, source_fps) where:

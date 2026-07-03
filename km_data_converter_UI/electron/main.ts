@@ -1,10 +1,17 @@
 import { app, BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from "electron";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
+
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("enable-webgl");
 
 let mainWindow: BrowserWindow | null = null;
 let activeConversion: ChildProcessWithoutNullStreams | null = null;
+let activeConversionPaused = false;
+let activeRerunViewer: ActiveRerunViewer | null = null;
+let lastRerunLogs: string[] = [];
 
 function createWindow() {
   const preload = path.join(__dirname, "preload.cjs");
@@ -73,6 +80,446 @@ function quoteArg(value: string) {
 
 function commandPreview(command: string, args: string[]) {
   return [command, ...args.map(quoteArg)].join(" ");
+}
+
+function execFileAsync(file: string, args: string[]) {
+  return new Promise<void>((resolve, reject) => {
+    execFile(file, args, { windowsHide: true }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function getActiveConversionPid() {
+  const pid = activeConversion?.pid;
+  return typeof pid === "number" && Number.isFinite(pid) ? pid : null;
+}
+
+function windowsProcessTreeControlScript(pid: number, action: "suspend" | "resume") {
+  const nativeCall = action === "suspend" ? "NtSuspendProcess" : "NtResumeProcess";
+
+  return `
+$ErrorActionPreference = "Stop"
+$rootPid = ${pid}
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class NativeProcessControl {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern bool CloseHandle(IntPtr handle);
+
+  [DllImport("ntdll.dll")]
+  public static extern uint NtSuspendProcess(IntPtr processHandle);
+
+  [DllImport("ntdll.dll")]
+  public static extern uint NtResumeProcess(IntPtr processHandle);
+}
+"@
+
+function Get-ProcessTreeIds([int]$parentPid) {
+  $ids = @($parentPid)
+  $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentPid"
+  foreach ($child in $children) {
+    $ids += Get-ProcessTreeIds ([int]$child.ProcessId)
+  }
+  return $ids
+}
+
+$processIds = Get-ProcessTreeIds $rootPid
+if ("${action}" -eq "suspend") {
+  [array]::Reverse($processIds)
+}
+
+foreach ($processId in $processIds) {
+  $handle = [NativeProcessControl]::OpenProcess(0x0800, $false, [uint32]$processId)
+  if ($handle -eq [IntPtr]::Zero) {
+    continue
+  }
+
+  try {
+    $status = [NativeProcessControl]::${nativeCall}($handle)
+    if ($status -ne 0) {
+      throw "${nativeCall} failed for PID $processId with status $status"
+    }
+  } finally {
+    [void][NativeProcessControl]::CloseHandle($handle)
+  }
+}
+`;
+}
+
+async function pauseProcess(pid: number) {
+  if (process.platform === "win32") {
+    await execFileAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", windowsProcessTreeControlScript(pid, "suspend")]);
+    return;
+  }
+
+  process.kill(pid, "SIGSTOP");
+}
+
+async function resumeProcess(pid: number) {
+  if (process.platform === "win32") {
+    await execFileAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", windowsProcessTreeControlScript(pid, "resume")]);
+    return;
+  }
+
+  process.kill(pid, "SIGCONT");
+}
+
+async function stopProcessTree(pid: number) {
+  if (process.platform === "win32") {
+    await execFileAsync("taskkill.exe", ["/PID", String(pid), "/T", "/F"]);
+    return;
+  }
+
+  process.kill(pid, "SIGTERM");
+}
+
+function parsePort(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) {
+    return parsed;
+  }
+  return fallback;
+}
+
+function getRerunConfig(): RerunConfig {
+  const sourceDir = process.env.RERUN_SOURCE_DIR || path.resolve(getRepoRoot(), "rerun-0.32.2");
+  const builtExecutable = process.platform === "win32" ? path.join(sourceDir, "target", "release", "rerun.exe") : path.join(sourceDir, "target", "release", "rerun");
+  const condaExecutable =
+    process.env.CONDA_PREFIX && (process.platform === "win32" ? path.join(process.env.CONDA_PREFIX, "Scripts", "rerun.exe") : path.join(process.env.CONDA_PREFIX, "bin", "rerun"));
+  const executablePath = process.env.RERUN_EXECUTABLE_PATH || (condaExecutable && fs.existsSync(condaExecutable) ? condaExecutable : fs.existsSync(builtExecutable) ? builtExecutable : "rerun");
+
+  return {
+    sourceDir,
+    executablePath,
+    grpcPort: parsePort(process.env.RERUN_GRPC_PORT, 9876),
+    serverMemoryLimit: process.env.RERUN_SERVER_MEMORY_LIMIT || "",
+    dataPath: process.env.RERUN_DATA_PATH || ""
+  };
+}
+
+function normalizeRerunPaths(paths: string[]) {
+  return paths.map((value) => path.normalize(value.trim())).filter(Boolean);
+}
+
+function sameRerunPaths(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => value.toLowerCase() === right[index].toLowerCase());
+}
+
+function appendRerunMemoryLimitArgs(args: string[], serverMemoryLimit: string) {
+  const trimmed = serverMemoryLimit.trim();
+  if (!trimmed || trimmed.toLowerCase() === "unlimited") {
+    return;
+  }
+
+  args.push("--server-memory-limit", trimmed);
+}
+
+function buildRerunDataSourceUrl(grpcPort: number) {
+  return `rerun+http://localhost:${grpcPort}/proxy`;
+}
+
+function getRerunStatus(): RerunStatus {
+  const config = getRerunConfig();
+  return {
+    running: Boolean(activeRerunViewer),
+    success: true,
+    url: activeRerunViewer?.url,
+    grpcPort: activeRerunViewer?.grpcPort ?? config.grpcPort,
+    command: activeRerunViewer?.command,
+    paths: activeRerunViewer?.paths ?? [],
+    logs: activeRerunViewer?.logs ?? lastRerunLogs,
+    executablePath: config.executablePath,
+    sourceDir: config.sourceDir,
+    dataPath: config.dataPath
+  };
+}
+
+function addRerunLog(message: string) {
+  if (!activeRerunViewer) {
+    return;
+  }
+
+  const trimmed = message.replace(/\u001b\[[0-9;]*m/g, "").trimEnd();
+  if (!trimmed) {
+    return;
+  }
+
+  activeRerunViewer.logs.push(trimmed);
+  activeRerunViewer.logs = activeRerunViewer.logs.slice(-120);
+  lastRerunLogs = activeRerunViewer.logs;
+}
+
+function validateRerunInputPaths(paths: string[]): string | null {
+  if (paths.length === 0) {
+    return "Select an .rrd, .rbl, .mcap file, or a LeRobot dataset directory.";
+  }
+
+  for (const targetPath of paths) {
+    if (!fs.existsSync(targetPath)) {
+      return `Path does not exist: ${targetPath}`;
+    }
+
+    const stat = fs.statSync(targetPath);
+    if (stat.isDirectory()) {
+      continue;
+    }
+
+    if (!stat.isFile()) {
+      return `Path is not a file or directory: ${targetPath}`;
+    }
+
+    const extension = path.extname(targetPath).toLowerCase();
+    if (![".rrd", ".rbl", ".mcap"].includes(extension)) {
+      return `Unsupported Rerun input file type: ${targetPath}`;
+    }
+  }
+
+  return null;
+}
+
+function isPortAvailable(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, "127.0.0.1");
+  });
+}
+
+async function findAvailablePort(preferredPort: number, reservedPorts: number[] = []) {
+  for (let offset = 0; offset < 100; offset += 1) {
+    const port = preferredPort + offset;
+    if (port > 65535 || reservedPorts.includes(port)) {
+      continue;
+    }
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+
+  return null;
+}
+
+function waitForRerunServer(child: ChildProcessWithoutNullStreams, port: number, timeoutMs = 10000) {
+  const startedAt = Date.now();
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (ready: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(ready);
+    };
+
+    const attempt = () => {
+      const socket = net.createConnection({ host: "127.0.0.1", port });
+      socket.once("connect", () => {
+        socket.end();
+        settle(true);
+      });
+      socket.once("error", () => {
+        socket.destroy();
+        if (settled) {
+          return;
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+          settle(false);
+          return;
+        }
+        setTimeout(attempt, 150);
+      });
+    };
+
+    child.once("close", () => settle(false));
+    attempt();
+  });
+}
+
+function stopRerunViewerProcess(message = "Rerun Viewer stopped."): RerunIpcResult {
+  if (!activeRerunViewer) {
+    return {
+      success: true,
+      running: false,
+      message: "Rerun Viewer is not running.",
+      logs: lastRerunLogs
+    };
+  }
+
+  const logs = [...activeRerunViewer.logs, message];
+  lastRerunLogs = logs.slice(-120);
+  activeRerunViewer.child.kill();
+  activeRerunViewer = null;
+
+  return {
+    success: true,
+    running: false,
+    message,
+    logs: lastRerunLogs
+  };
+}
+
+async function selectRerunPath(kind: RerunSelectKind) {
+  const options: OpenDialogOptions = {
+    title: kind === "directory" ? "Select Rerun input directory" : "Select Rerun input file",
+    properties: kind === "directory" ? ["openDirectory", "multiSelections"] : ["openFile", "multiSelections"],
+    filters: [
+      { name: "Rerun / MCAP", extensions: ["rrd", "rbl", "mcap"] },
+      { name: "All Files", extensions: ["*"] }
+    ]
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths;
+}
+
+async function startRerunViewer(request: RerunStartRequest): Promise<RerunIpcResult> {
+  const config = getRerunConfig();
+  const requestedPaths = normalizeRerunPaths(request.paths ?? (request.path ? [request.path] : config.dataPath ? [config.dataPath] : []));
+  const validationError = validateRerunInputPaths(requestedPaths);
+
+  if (validationError) {
+    return {
+      success: false,
+      running: Boolean(activeRerunViewer),
+      error: validationError,
+      logs: activeRerunViewer?.logs ?? lastRerunLogs
+    };
+  }
+
+  const grpcPort = await findAvailablePort(config.grpcPort);
+
+  if (grpcPort === null) {
+    return {
+      success: false,
+      running: Boolean(activeRerunViewer),
+      error: "No available ports found for the Rerun data service. Close old Rerun processes or set RERUN_GRPC_PORT.",
+      logs: activeRerunViewer?.logs ?? lastRerunLogs
+    };
+  }
+
+  if (activeRerunViewer && sameRerunPaths(activeRerunViewer.paths, requestedPaths)) {
+    return {
+      success: true,
+      running: true,
+      url: activeRerunViewer.url,
+      grpcPort: activeRerunViewer.grpcPort,
+      command: activeRerunViewer.command,
+      paths: activeRerunViewer.paths,
+      logs: activeRerunViewer.logs,
+      message: "Rerun Viewer is already running for the selected input."
+    };
+  }
+
+  if (activeRerunViewer) {
+    stopRerunViewerProcess("Restarting Rerun Viewer for a new input.");
+  }
+
+  const args = [
+    "--serve-grpc",
+    "--bind",
+    "127.0.0.1",
+    "--port",
+    String(grpcPort)
+  ];
+  appendRerunMemoryLimitArgs(args, config.serverMemoryLimit);
+  args.push(...requestedPaths);
+  const command = commandPreview(config.executablePath, args);
+  const url = buildRerunDataSourceUrl(grpcPort);
+  lastRerunLogs = [`cwd: ${getRepoRoot()}`, `command: ${command}`, `data source: ${url}`];
+  const child = spawn(config.executablePath, args, {
+    cwd: getRepoRoot(),
+    shell: false,
+    windowsHide: true
+  });
+
+  activeRerunViewer = {
+    child,
+    paths: requestedPaths,
+    url,
+    grpcPort,
+    command,
+    logs: lastRerunLogs
+  };
+
+  child.stdout.on("data", (chunk: Buffer) => addRerunLog(chunk.toString()));
+  child.stderr.on("data", (chunk: Buffer) => addRerunLog(chunk.toString()));
+  child.on("close", (code, signal) => {
+    if (activeRerunViewer?.child === child) {
+      addRerunLog(`Rerun Viewer exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}.`);
+      activeRerunViewer = null;
+    }
+  });
+
+  const spawnError = await new Promise<Error | null>((resolve) => {
+    const timeout = setTimeout(() => resolve(null), 600);
+    child.once("spawn", () => {
+      clearTimeout(timeout);
+      resolve(null);
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      resolve(error);
+    });
+  });
+
+  if (spawnError) {
+    const error = spawnError.message;
+    lastRerunLogs = [error];
+    activeRerunViewer = null;
+    return {
+      success: false,
+      running: false,
+      error,
+      logs: lastRerunLogs
+    };
+  }
+
+  const serverReady = await waitForRerunServer(child, grpcPort);
+  if (!serverReady) {
+    const logs = [...(activeRerunViewer?.logs ?? lastRerunLogs), `Rerun data service did not start listening on port ${grpcPort}.`].slice(-120);
+    lastRerunLogs = logs;
+    activeRerunViewer?.child.kill();
+    activeRerunViewer = null;
+    return {
+      success: false,
+      running: false,
+      error: `Rerun data service did not start listening on port ${grpcPort}.`,
+      logs
+    };
+  }
+
+  return {
+    success: true,
+    running: true,
+    url,
+    grpcPort,
+    command,
+    paths: requestedPaths,
+    logs: activeRerunViewer.logs,
+    message: "Rerun data service started."
+  };
 }
 
 async function selectDirectory(kind: DirectoryKind) {
@@ -161,6 +608,7 @@ function validatePath(targetPath: string, kind: DirectoryKind): PathValidation {
 function buildConversionCommand(config: ConversionConfig) {
   const paths = outputBaseToPipelinePaths(config.outputPath);
   const args = [
+    "-u",
     "-m",
     "km_data_converter",
     "run-full",
@@ -220,9 +668,14 @@ ipcMain.handle("conversion:run", (_, config: ConversionConfig): ConversionStarte
 
   sendLog("system", `cwd: ${repoRoot}`);
   sendLog("system", `command: ${preview}`);
+  activeConversionPaused = false;
 
   activeConversion = spawn(command, args, {
     cwd: repoRoot,
+    env: {
+      ...process.env,
+      PYTHONUNBUFFERED: "1"
+    },
     shell: false,
     windowsHide: true
   });
@@ -233,11 +686,13 @@ ipcMain.handle("conversion:run", (_, config: ConversionConfig): ConversionStarte
     sendLog("stderr", error.message);
     mainWindow?.webContents.send("conversion:exit", { code: 1, signal: null });
     activeConversion = null;
+    activeConversionPaused = false;
   });
   activeConversion.on("close", (code, signal) => {
     sendLog(code === 0 ? "system" : "stderr", `Conversion exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}.`);
     mainWindow?.webContents.send("conversion:exit", { code, signal });
     activeConversion = null;
+    activeConversionPaused = false;
   });
 
   return {
@@ -253,14 +708,78 @@ ipcMain.handle("conversion:run", (_, config: ConversionConfig): ConversionStarte
   };
 });
 
+ipcMain.handle("conversion:pause", async (): Promise<ConversionControlResult> => {
+  const pid = getActiveConversionPid();
+  if (pid === null) {
+    return { ok: false, paused: false, message: "No active conversion process." };
+  }
+  if (activeConversionPaused) {
+    return { ok: true, paused: true, message: "Conversion is already paused." };
+  }
+
+  try {
+    await pauseProcess(pid);
+    activeConversionPaused = true;
+    sendLog("system", "Conversion paused.");
+    return { ok: true, paused: true, message: "Conversion paused." };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to pause conversion.";
+    sendLog("stderr", message);
+    return { ok: false, paused: false, message };
+  }
+});
+
+ipcMain.handle("conversion:resume", async (): Promise<ConversionControlResult> => {
+  const pid = getActiveConversionPid();
+  if (pid === null) {
+    return { ok: false, paused: false, message: "No active conversion process." };
+  }
+  if (!activeConversionPaused) {
+    return { ok: true, paused: false, message: "Conversion is already running." };
+  }
+
+  try {
+    await resumeProcess(pid);
+    activeConversionPaused = false;
+    sendLog("system", "Conversion resumed.");
+    return { ok: true, paused: false, message: "Conversion resumed." };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to resume conversion.";
+    sendLog("stderr", message);
+    return { ok: false, paused: true, message };
+  }
+});
+
+ipcMain.handle("conversion:stop", async (): Promise<ConversionControlResult> => {
+  const pid = getActiveConversionPid();
+  if (pid === null) {
+    return { ok: false, paused: false, message: "No active conversion process." };
+  }
+
+  try {
+    sendLog("system", "Stopping conversion...");
+    await stopProcessTree(pid);
+    activeConversionPaused = false;
+    return { ok: true, paused: false, message: "Conversion stop requested." };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to stop conversion.";
+    sendLog("stderr", message);
+    return { ok: false, paused: activeConversionPaused, message };
+  }
+});
+
 ipcMain.handle("rerun:open", (_, datasetPath: string): RerunResult => {
-  const trimmedPath = datasetPath.trim();
-  if (!trimmedPath) {
+  const paths = datasetPath
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (paths.length === 0) {
     return { ok: false, message: "Dataset path is required." };
   }
 
-  const cwd = fs.existsSync(trimmedPath) && fs.statSync(trimmedPath).isDirectory() ? path.dirname(trimmedPath) : getRepoRoot();
-  const child = spawn("rerun", [trimmedPath], {
+  const firstPath = paths[0];
+  const cwd = fs.existsSync(firstPath) && fs.statSync(firstPath).isDirectory() ? path.dirname(firstPath) : getRepoRoot();
+  const child = spawn("rerun", paths, {
     cwd,
     shell: false,
     detached: true,
@@ -272,9 +791,14 @@ ipcMain.handle("rerun:open", (_, datasetPath: string): RerunResult => {
 
   return {
     ok: true,
-    command: commandPreview("rerun", [trimmedPath])
+    command: commandPreview("rerun", paths)
   };
 });
+
+ipcMain.handle("rerun:selectPath", (_, kind: RerunSelectKind) => selectRerunPath(kind));
+ipcMain.handle("rerun:startViewer", (_, request: RerunStartRequest) => startRerunViewer(request));
+ipcMain.handle("rerun:stopViewer", () => stopRerunViewerProcess());
+ipcMain.handle("rerun:getStatus", () => getRerunStatus());
 
 app.whenReady().then(() => {
   createWindow();
@@ -296,5 +820,10 @@ app.on("before-quit", () => {
   if (activeConversion) {
     activeConversion.kill();
     activeConversion = null;
+    activeConversionPaused = false;
+  }
+  if (activeRerunViewer) {
+    activeRerunViewer.child.kill();
+    activeRerunViewer = null;
   }
 });

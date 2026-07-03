@@ -28,7 +28,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "input_dir_path",
         nargs="?",
         type=Path,
-        default=Path(r"C:\Users\willi\Desktop\0326data"),
+        default=None,
         help="Optional positional input directory. Equivalent to --input-dir.",
     )
     parser.add_argument(

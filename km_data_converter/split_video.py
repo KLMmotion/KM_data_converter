@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from fractions import Fraction
 from pathlib import Path
 
+import av
 import cv2
+
+KEYFRAME_INTERVAL_SECONDS = 1.5
 
 
 def _build_inner_slice(size: int, start_ratio: float, end_ratio: float) -> slice:
@@ -15,6 +19,48 @@ def _build_inner_slice(size: int, start_ratio: float, end_ratio: float) -> slice
     start = max(0, min(start, size - 1))
     end = max(start + 1, min(end, size))
     return slice(start, end)
+
+
+def _fps_fraction(fps: float) -> Fraction:
+    return Fraction(str(round(fps, 6))).limit_denominator(1000)
+
+
+def _keyframe_interval(fps: float) -> int:
+    return max(1, int(round(fps * KEYFRAME_INTERVAL_SECONDS)))
+
+
+def _open_h264_writer(out_path: Path, fps: float, width: int, height: int) -> tuple[av.container.OutputContainer, av.VideoStream]:
+    container = av.open(str(out_path), mode="w", format="mp4")
+    stream = container.add_stream("libx264", rate=_fps_fraction(fps))
+    assert type(stream) is av.VideoStream
+
+    keyframe_interval = _keyframe_interval(fps)
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = "yuv420p"
+    stream.codec_context.gop_size = keyframe_interval
+    stream.codec_context.max_b_frames = 0
+    stream.codec_context.options = {
+        "preset": "veryfast",
+        "tune": "zerolatency",
+        "x264-params": f"keyint={keyframe_interval}:min-keyint={keyframe_interval}:scenecut=0",
+    }
+    return container, stream
+
+
+def _write_h264_frame(writer: tuple[av.container.OutputContainer, av.VideoStream], frame_bgr) -> None:
+    container, stream = writer
+    frame = av.VideoFrame.from_ndarray(frame_bgr, format="bgr24")
+    frame = frame.reformat(format="yuv420p")
+    for packet in stream.encode(frame):
+        container.mux(packet)
+
+
+def _close_h264_writer(writer: tuple[av.container.OutputContainer, av.VideoStream]) -> None:
+    container, stream = writer
+    for packet in stream.encode(None):
+        container.mux(packet)
+    container.close()
 
 
 def split_cameras_video(video_path: Path, target_fps: float = 10.0) -> bool:
@@ -66,8 +112,7 @@ def split_cameras_video(video_path: Path, target_fps: float = 10.0) -> bool:
     #     inner_cols = _build_inner_slice(half_w, margins["left"], margins["right"])
     #     inner_slices[name] = (inner_rows, inner_cols)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writers: dict[str, cv2.VideoWriter] = {}
+    writers: dict[str, tuple[av.container.OutputContainer, av.VideoStream]] = {}
 
     sample_interval = 1.0 / output_fps
     next_output_time = 0.0
@@ -82,11 +127,7 @@ def split_cameras_video(video_path: Path, target_fps: float = 10.0) -> bool:
             out_h = half_h
             out_w = half_w
             out_path = out_dir / name
-            writer = cv2.VideoWriter(str(out_path), fourcc, output_fps, (out_w, out_h))
-            if not writer.isOpened():
-                print(f"[ERROR] Cannot create writer: {out_path}")
-                return False
-            writers[name] = writer
+            writers[name] = _open_h264_writer(out_path, output_fps, out_w, out_h)
 
         while True:
             ok, frame = cap.read()
@@ -99,7 +140,7 @@ def split_cameras_video(video_path: Path, target_fps: float = 10.0) -> bool:
                     crop = frame[rows, cols]
                     # inner_rows, inner_cols = inner_slices[name]
                     # crop = crop[inner_rows, inner_cols]
-                    writers[name].write(crop)
+                    _write_h264_frame(writers[name], crop)
 
                 written_count += 1
                 next_output_time += sample_interval
@@ -115,7 +156,7 @@ def split_cameras_video(video_path: Path, target_fps: float = 10.0) -> bool:
     finally:
         cap.release()
         for writer in writers.values():
-            writer.release()
+            _close_h264_writer(writer)
 
 
 def find_cameras_videos(root: Path) -> list[Path]:

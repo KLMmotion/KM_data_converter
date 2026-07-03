@@ -22,8 +22,8 @@ export function LogConsole({ title, clearLabel, copyLabel, emptyLabel, logs, onC
   };
 
   return (
-    <section className="flex h-[calc(100vh-168px)] min-h-[520px] flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950/85 shadow-panel ring-1 ring-cyan-300/10">
-      <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+    <section className="flex h-[calc(100vh-168px)] max-h-[calc(100vh-168px)] min-h-0 flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950/85 shadow-panel ring-1 ring-cyan-300/10">
+      <div className="shrink-0 flex items-center justify-between border-b border-white/10 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-300/12 text-emerald-200">
             <Terminal size={17} />
@@ -51,7 +51,7 @@ export function LogConsole({ title, clearLabel, copyLabel, emptyLabel, logs, onC
           </button>
         </div>
       </div>
-      <div className="console-scroll min-h-0 flex-1 overflow-y-auto p-5 font-mono text-xs leading-6">
+      <div className="console-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 font-mono text-xs leading-6">
         {logs.length === 0 ? (
           <div className="flex h-full min-h-72 items-center justify-center rounded-2xl border border-dashed border-white/10 text-slate-500">{emptyLabel}</div>
         ) : (

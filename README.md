@@ -192,10 +192,10 @@ observation.state = [eef_left(7), eef_right(7), gripper_feedback_L(6), gripper_f
 
 Where:
 
-- `eef_left`: 7D left end-effector pose
-- `eef_right`: 7D right end-effector pose
-- `gripper_feedback_L`: 6D left gripper feedback
-- `gripper_feedback_R`: 6D right gripper feedback
+- 0-6: left end-effector pose from `eef_left`
+- 7-13: right end-effector pose from `eef_right`
+- 14-19: left gripper feedback from `gripper_feedback_L`
+- 20-25: right gripper feedback from `gripper_feedback_R`
 
 End-effector pose fields are ordered as:
 

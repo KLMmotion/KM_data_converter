@@ -1,35 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
-import { Cpu, Database, Gauge, Layers3, Settings2, ShieldCheck, Sparkles } from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { Box, Cpu, Database, Gauge, Loader2, Settings2 } from "lucide-react";
 import { ConversionPanel } from "./components/ConversionPanel";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { LogConsole } from "./components/LogConsole";
 import { PathSelector } from "./components/PathSelector";
-import { RerunViewer } from "./components/RerunViewer";
 import { TaskDescriptionInput } from "./components/TaskDescriptionInput";
 import { createTranslator } from "./i18n";
 
 const DEFAULT_REPO_ID = "rerun/droid_lerobot_full";
 const STEP_PROGRESS = [14, 32, 56, 82, 94];
+const RerunViewer = lazy(() => import("./components/RerunViewer").then((module) => ({ default: module.RerunViewer })));
 
 function isElectronReady() {
   return typeof window !== "undefined" && Boolean(window.kernelMind);
-}
-
-function normalizeForPreview(pathValue: string) {
-  const trimmed = pathValue.trim().replaceAll("/", "\\");
-  return trimmed.endsWith("\\") ? trimmed.slice(0, -1) : trimmed;
-}
-
-function previewDatasetPath(outputPath: string) {
-  const normalized = normalizeForPreview(outputPath);
-  if (!normalized) {
-    return "";
-  }
-  const leaf = normalized.split("\\").pop()?.toLowerCase();
-  if (leaf === "lerobot_output") {
-    return `${normalized}\\lerobot_datasets-<timestamp>`;
-  }
-  return `${normalized}\\lerobot_output\\lerobot_datasets-<timestamp>`;
 }
 
 function parseStepIndex(message: string) {
@@ -52,6 +35,13 @@ function parseDatasetPath(message: string) {
   }
 
   return null;
+}
+
+function parseRerunPathInput(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((pathValue) => pathValue.trim())
+    .filter(Boolean);
 }
 
 function buildStepStates(status: ConversionStatus, activeStep: number, labels: string[]) {
@@ -82,19 +72,22 @@ export default function App() {
   const [endEffector, setEndEffector] = useState<EndEffectorMode>("gripper");
   const [taskDescription, setTaskDescription] = useState("");
   const [strict, setStrict] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [status, setStatus] = useState<ConversionStatus>("idle");
+  const [conversionPaused, setConversionPaused] = useState(false);
+  const [controllingConversion, setControllingConversion] = useState(false);
   const [sourceValidation, setSourceValidation] = useState<PathValidation | null>(null);
   const [outputValidation, setOutputValidation] = useState<PathValidation | null>(null);
   const [validatingSource, setValidatingSource] = useState(false);
   const [validatingOutput, setValidatingOutput] = useState(false);
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [activeStep, setActiveStep] = useState(0);
-  const [commandPreview, setCommandPreview] = useState("");
-  const [datasetPath, setDatasetPath] = useState("");
-  const [rerunCommand, setRerunCommand] = useState("");
-  const [rerunLaunched, setRerunLaunched] = useState(false);
-  const [openingRerun, setOpeningRerun] = useState(false);
+  const [rerunPathInput, setRerunPathInput] = useState("");
+  const [rerunStatus, setRerunStatus] = useState<RerunStatus | null>(null);
+  const [rerunLogs, setRerunLogs] = useState<string[]>([]);
+  const [startingRerun, setStartingRerun] = useState(false);
+  const [stoppingRerun, setStoppingRerun] = useState(false);
+  const [rerunPanelOpen, setRerunPanelOpen] = useState(false);
 
   const electronReady = isElectronReady();
   const fpsValue = Number(fps);
@@ -103,7 +96,6 @@ export default function App() {
   const outputValid = Boolean(outputPath.trim());
   const configLocked = status === "running";
   const canStart = electronReady && sourceValid && outputValid && fpsValid && status !== "running";
-  const finalDatasetPreview = datasetPath || previewDatasetPath(outputPath) || t("waitingDataset");
   const progress = status === "success" ? 100 : status === "idle" ? 0 : STEP_PROGRESS[activeStep] ?? 8;
   const steps = buildStepStates(status, activeStep, [t("step1"), t("step2"), t("step3"), t("step4"), t("step5")]);
 
@@ -150,7 +142,7 @@ export default function App() {
 
       const parsedDatasetPath = parseDatasetPath(event.message);
       if (parsedDatasetPath) {
-        setDatasetPath(parsedDatasetPath);
+        setRerunPathInput(parsedDatasetPath);
       }
     });
 
@@ -161,6 +153,8 @@ export default function App() {
       } else {
         setStatus("failed");
       }
+      setConversionPaused(false);
+      setControllingConversion(false);
     });
 
     return () => {
@@ -168,6 +162,32 @@ export default function App() {
       removeExitListener();
     };
   }, [electronReady]);
+
+  useEffect(() => {
+    if (!electronReady || !rerunPanelOpen) {
+      return;
+    }
+
+    let mounted = true;
+    const refreshStatus = () => {
+      window.kernelMind.getRerunStatus().then((status) => {
+        if (!mounted) {
+          return;
+        }
+        setRerunStatus(status);
+        setRerunLogs(status.logs ?? []);
+        setRerunPathInput((current) => current || status.dataPath || "");
+      });
+    };
+
+    refreshStatus();
+    const interval = window.setInterval(refreshStatus, 2500);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, [electronReady, rerunPanelOpen]);
 
   async function browse(kind: DirectoryKind) {
     if (!electronReady) {
@@ -184,9 +204,107 @@ export default function App() {
     } else if (kind === "output") {
       setOutputPath(selected);
     } else {
-      setDatasetPath(selected);
-      setRerunLaunched(false);
-      setRerunCommand("");
+      setRerunPathInput(selected);
+    }
+  }
+
+  async function browseRerunInput(kind: RerunSelectKind) {
+    if (!electronReady) {
+      return;
+    }
+
+    const selected = await window.kernelMind.selectRerunPath(kind);
+    if (!selected || selected.length === 0) {
+      return;
+    }
+
+    setRerunPathInput(selected.join("\n"));
+  }
+
+  function pushRerunLog(message: string) {
+    setRerunLogs((current) => [...current, message].slice(-120));
+  }
+
+  async function startRerunViewer() {
+    if (!electronReady) {
+      return;
+    }
+
+    const paths = parseRerunPathInput(rerunPathInput);
+    if (paths.length === 0) {
+      pushRerunLog("Select an .rrd, .rbl, .mcap file, or a LeRobot dataset directory first.");
+      return;
+    }
+
+    setStartingRerun(true);
+    setRerunStatus((current) => ({
+      ...(current ?? { running: false, success: true }),
+      success: true,
+      running: false,
+      error: undefined,
+      message: "Starting Rerun data service..."
+    }));
+    setRerunLogs((current) => [...current, `Starting Rerun data service for: ${paths.join(", ")}`].slice(-120));
+    try {
+      const result = await window.kernelMind.startRerunViewer({ paths });
+      setRerunStatus({
+        ...result,
+        running: Boolean(result.running)
+      });
+      setRerunLogs(result.logs ?? []);
+      if (!result.success) {
+        pushRerunLog(result.error ?? result.message ?? "Failed to start Rerun data service.");
+      }
+    } catch (error) {
+      pushRerunLog(error instanceof Error ? error.message : "Failed to start Rerun data service.");
+    } finally {
+      setStartingRerun(false);
+    }
+  }
+
+  async function stopRerunViewer() {
+    if (!electronReady) {
+      return;
+    }
+
+    setStoppingRerun(true);
+    try {
+      const result = await window.kernelMind.stopRerunViewer();
+      setRerunStatus({
+        ...result,
+        running: false
+      });
+      setRerunLogs(result.logs ?? []);
+      if (!result.success) {
+        pushRerunLog(result.error ?? result.message ?? "Failed to stop Rerun data service.");
+      }
+    } catch (error) {
+      pushRerunLog(error instanceof Error ? error.message : "Failed to stop Rerun data service.");
+    } finally {
+      setStoppingRerun(false);
+    }
+  }
+
+  async function openNativeRerunViewer() {
+    if (!electronReady) {
+      return;
+    }
+
+    const paths = parseRerunPathInput(rerunPathInput);
+    if (paths.length === 0) {
+      pushRerunLog("Select an .rrd, .rbl, .mcap file, or a LeRobot dataset directory first.");
+      return;
+    }
+
+    try {
+      const result = await window.kernelMind.openRerun(paths.join("\n"));
+      if (result.ok) {
+        pushRerunLog(result.command ?? `rerun ${paths.join(" ")}`);
+      } else {
+        pushRerunLog(result.message ?? "Failed to open native Rerun Viewer.");
+      }
+    } catch (error) {
+      pushRerunLog(error instanceof Error ? error.message : "Failed to open native Rerun Viewer.");
     }
   }
 
@@ -196,10 +314,9 @@ export default function App() {
     }
 
     setStatus("running");
+    setConversionPaused(false);
+    setControllingConversion(false);
     setActiveStep(0);
-    setDatasetPath("");
-    setRerunLaunched(false);
-    setRerunCommand("");
     setLogs([]);
 
     const result = await window.kernelMind.runConversion({
@@ -214,6 +331,8 @@ export default function App() {
 
     if (!result.ok) {
       setStatus("failed");
+      setConversionPaused(false);
+      setControllingConversion(false);
       setLogs((current) => [
         ...current,
         {
@@ -226,36 +345,89 @@ export default function App() {
       return;
     }
 
-    setCommandPreview(result.command ?? result.paths?.commandPreview ?? "");
+    if (result.paths?.video2rrdDir) {
+      setRerunPathInput(result.paths.video2rrdDir);
+    }
   }
 
-  async function openRerun() {
-    const targetPath = datasetPath.trim();
-    if (!electronReady || !targetPath) {
+  async function pauseConversion() {
+    if (!electronReady || status !== "running" || conversionPaused || controllingConversion) {
       return;
     }
 
-    setOpeningRerun(true);
+    setControllingConversion(true);
     try {
-      const result = await window.kernelMind.openRerun(targetPath);
+      const result = await window.kernelMind.pauseConversion();
       if (result.ok) {
-        setRerunCommand(result.command ?? `rerun ${targetPath}`);
-        setRerunLaunched(true);
-      } else {
-        setLogs((current) => [
-          ...current,
-          {
-            id: `${Date.now()}-rerun-error`,
-            level: "stderr",
-            message: `${result.message ?? "Failed to open Rerun."}\n`,
-            timestamp: new Date().toISOString()
-          }
-        ]);
+        setConversionPaused(Boolean(result.paused));
       }
     } finally {
-      setOpeningRerun(false);
+      setControllingConversion(false);
     }
   }
+
+  async function resumeConversion() {
+    if (!electronReady || status !== "running" || !conversionPaused || controllingConversion) {
+      return;
+    }
+
+    setControllingConversion(true);
+    try {
+      const result = await window.kernelMind.resumeConversion();
+      if (result.ok) {
+        setConversionPaused(Boolean(result.paused));
+      }
+    } finally {
+      setControllingConversion(false);
+    }
+  }
+
+  async function stopConversion() {
+    if (!electronReady || status !== "running" || controllingConversion) {
+      return;
+    }
+
+    setControllingConversion(true);
+    const result = await window.kernelMind.stopConversion();
+    if (result.ok) {
+      setConversionPaused(false);
+    } else {
+      setControllingConversion(false);
+    }
+  }
+
+  const rerunViewerPanel = (
+    <RerunViewer
+      labels={{
+        title: t("rerunTitle"),
+        hint: t("rerunHint"),
+        browseFile: t("rerunBrowseFile"),
+        browseDirectory: t("rerunBrowseDirectory"),
+        start: t("rerunStart"),
+        stop: t("rerunStop"),
+        openNative: t("openRerun"),
+        input: t("rerunInput"),
+        url: t("rerunViewerUrl"),
+        command: t("rerunCommand"),
+        logs: t("rerunLogs"),
+        idle: t("rerunIdle"),
+        running: t("rerunRunning"),
+        placeholder: t("rerunPlaceholder"),
+        emptyLogs: t("rerunLogsEmpty")
+      }}
+      pathInput={rerunPathInput}
+      status={rerunStatus}
+      logs={rerunLogs}
+      isStarting={startingRerun}
+      isStopping={stoppingRerun}
+      onPathChange={setRerunPathInput}
+      onBrowseFile={() => browseRerunInput("file")}
+      onBrowseDirectory={() => browseRerunInput("directory")}
+      onStart={startRerunViewer}
+      onStop={stopRerunViewer}
+      onOpenNative={openNativeRerunViewer}
+    />
+  );
 
   return (
     <main className="min-h-screen overflow-hidden bg-[#06101f] text-slate-100">
@@ -289,8 +461,8 @@ export default function App() {
           </div>
         )}
 
-        <div className="grid flex-1 gap-5 xl:grid-cols-[460px_minmax(420px,1fr)_minmax(430px,0.9fr)]">
-          <aside className="space-y-5 rounded-3xl border border-white/10 bg-white/[0.08] p-6 shadow-panel backdrop-blur-xl">
+        <div className="mb-5 grid flex-1 items-stretch gap-5 xl:grid-cols-[460px_minmax(420px,1fr)_minmax(430px,0.9fr)]">
+          <aside className="h-full space-y-5 rounded-3xl border border-white/10 bg-white/[0.08] p-6 shadow-panel backdrop-blur-xl">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-300/12 text-sky-100">
                 <Database size={19} />
@@ -424,79 +596,68 @@ export default function App() {
             </section>
           </aside>
 
-          <section className="space-y-5">
+          <section className="h-full min-h-0 overflow-hidden">
             <ConversionPanel
               status={status}
               canStart={canStart}
+              isPaused={conversionPaused}
+              isControlling={controllingConversion}
               progress={progress}
               steps={steps}
-              commandPreview={commandPreview}
               labels={{
                 title: t("conversionStatus"),
                 start: t("start"),
+                pause: t("pause"),
+                resume: t("resume"),
+                stop: t("stop"),
                 idle: t("idle"),
                 running: t("running"),
+                paused: t("paused"),
                 success: t("success"),
-                failed: t("failed"),
-                command: t("command")
+                failed: t("failed")
               }}
               onStart={startConversion}
-            />
-
-            <div className="grid gap-5 lg:grid-cols-2">
-              <div className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 shadow-panel backdrop-blur-xl">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-300/12 text-emerald-100">
-                    <ShieldCheck size={18} />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{t("ready")}</p>
-                    <p className="mt-1 text-sm text-slate-300">{sourceValid ? sourceValidation?.message : t("invalidSource")}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="rounded-3xl border border-white/10 bg-white/[0.08] p-5 shadow-panel backdrop-blur-xl">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-cyan-300/12 text-cyan-100">
-                    <Layers3 size={18} />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{t("finalDataset")}</p>
-                    <p className="mt-1 truncate font-mono text-sm text-slate-300" title={finalDatasetPreview}>
-                      {finalDatasetPreview}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <RerunViewer
-              title={t("rerunTitle")}
-              hint={t("rerunHint")}
-              openLabel={t("openRerun")}
-              commandLabel={t("rerunCommand")}
-              browseLabel={t("browse")}
-              idleLabel={t("rerunIdle")}
-              launchedLabel={t("rerunLaunched")}
-              datasetLabel={t("finalDataset")}
-              datasetPath={datasetPath}
-              datasetPlaceholder={previewDatasetPath(outputPath) || "C:\\path\\to\\lerobot_datasets-yy-MM-dd-HH-mm-ss"}
-              command={rerunCommand || (datasetPath ? `rerun ${datasetPath}` : "")}
-              canOpen={Boolean(datasetPath.trim())}
-              isOpening={openingRerun}
-              launched={rerunLaunched}
-              onPathChange={(path) => {
-                setDatasetPath(path);
-                setRerunLaunched(false);
-                setRerunCommand("");
-              }}
-              onBrowse={() => browse("dataset")}
-              onOpen={openRerun}
+              onPause={pauseConversion}
+              onResume={resumeConversion}
+              onStop={stopConversion}
             />
           </section>
 
           <LogConsole title={t("logs")} clearLabel={t("clear")} copyLabel={t("copy")} emptyLabel={t("logsEmpty")} logs={logs} onClear={() => setLogs([])} />
         </div>
+
+        {rerunPanelOpen ? (
+          <Suspense
+            fallback={
+              <section className="flex min-h-64 items-center justify-center rounded-3xl border border-cyan-200/15 bg-slate-950/70 text-sm text-slate-400 shadow-panel backdrop-blur-xl">
+                <Loader2 size={24} className="mr-3 animate-spin text-cyan-200" />
+                {t("rerunStart")}
+              </section>
+            }
+          >
+            {rerunViewerPanel}
+          </Suspense>
+        ) : (
+          <section className="flex flex-col gap-4 rounded-3xl border border-cyan-200/15 bg-slate-950/70 p-5 shadow-panel backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-300/14 text-cyan-100 shadow-glow">
+                <Box size={21} />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-white">{t("rerunTitle")}</h3>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-400">{t("rerunHint")}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRerunPanelOpen(true)}
+              className="inline-flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-cyan-200/25 bg-cyan-200/10 px-4 py-2.5 text-xs font-semibold text-cyan-50 transition hover:border-cyan-100/55 hover:bg-cyan-200/18"
+            >
+              <Box size={14} />
+              {t("rerunStart")}
+            </button>
+          </section>
+        )}
 
         {/* <footer className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
           <span className="inline-flex items-center gap-2">

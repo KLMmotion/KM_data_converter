@@ -1,4 +1,4 @@
-import { Activity, Check, Circle, Loader2, Play, X } from "lucide-react";
+import { Activity, Check, Circle, Loader2, Pause, Play, Square, X } from "lucide-react";
 
 interface StepItem {
   label: string;
@@ -8,19 +8,26 @@ interface StepItem {
 interface ConversionPanelProps {
   status: ConversionStatus;
   canStart: boolean;
+  isPaused: boolean;
+  isControlling: boolean;
   progress: number;
   steps: StepItem[];
   labels: {
     title: string;
     start: string;
+    pause: string;
+    resume: string;
+    stop: string;
     idle: string;
     running: string;
+    paused: string;
     success: string;
     failed: string;
-    command: string;
   };
-  commandPreview?: string;
   onStart: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onStop: () => void;
 }
 
 const statusClasses: Record<ConversionStatus, string> = {
@@ -30,7 +37,8 @@ const statusClasses: Record<ConversionStatus, string> = {
   failed: "border-rose-300/30 bg-rose-300/12 text-rose-100"
 };
 
-function statusLabel(status: ConversionStatus, labels: ConversionPanelProps["labels"]) {
+function statusLabel(status: ConversionStatus, labels: ConversionPanelProps["labels"], isPaused: boolean) {
+  if (isPaused) return labels.paused;
   if (status === "running") return labels.running;
   if (status === "success") return labels.success;
   if (status === "failed") return labels.failed;
@@ -44,26 +52,53 @@ function StepIcon({ state }: { state: StepItem["state"] }) {
   return <Circle size={13} />;
 }
 
-export function ConversionPanel({ status, canStart, progress, steps, labels, commandPreview, onStart }: ConversionPanelProps) {
+export function ConversionPanel({ status, canStart, isPaused, isControlling, progress, steps, labels, onStart, onPause, onResume, onStop }: ConversionPanelProps) {
+  const isRunning = status === "running";
+
   return (
-    <section className="space-y-6 rounded-3xl border border-white/10 bg-white/[0.08] p-6 shadow-panel backdrop-blur-xl">
+    <section className="flex h-full flex-col space-y-6 rounded-3xl border border-white/10 bg-white/[0.08] p-6 shadow-panel backdrop-blur-xl">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-200/80">{labels.title}</p>
           <div className={`mt-3 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold ${statusClasses[status]}`}>
-            <Activity size={15} className={status === "running" ? "animate-pulse" : ""} />
-            {statusLabel(status, labels)}
+            <Activity size={15} className={isRunning && !isPaused ? "animate-pulse" : ""} />
+            {statusLabel(status, labels, isPaused)}
           </div>
         </div>
-        <button
-          type="button"
-          disabled={!canStart || status === "running"}
-          onClick={onStart}
-          className="group inline-flex min-h-14 items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-sky-300 to-cyan-200 px-7 text-base font-bold text-slate-950 shadow-glow transition hover:scale-[1.01] hover:from-sky-200 hover:to-cyan-100 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100"
-        >
-          {status === "running" ? <Loader2 size={19} className="animate-spin" /> : <Play size={19} fill="currentColor" />}
-          {labels.start}
-        </button>
+        <div className="flex flex-wrap justify-end gap-3">
+          {!isRunning ? (
+            <button
+              type="button"
+              disabled={!canStart}
+              onClick={onStart}
+              className="group inline-flex min-h-14 items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-sky-300 to-cyan-200 px-7 text-base font-bold text-slate-950 shadow-glow transition hover:scale-[1.01] hover:from-sky-200 hover:to-cyan-100 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100"
+            >
+              <Play size={19} fill="currentColor" />
+              {labels.start}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={isControlling}
+                onClick={isPaused ? onResume : onPause}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-cyan-200/30 bg-cyan-200/10 px-5 text-sm font-bold text-cyan-50 transition hover:border-cyan-100/60 hover:bg-cyan-200/18 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {isControlling ? <Loader2 size={17} className="animate-spin" /> : isPaused ? <Play size={17} fill="currentColor" /> : <Pause size={17} fill="currentColor" />}
+                {isPaused ? labels.resume : labels.pause}
+              </button>
+              <button
+                type="button"
+                disabled={isControlling}
+                onClick={onStop}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-rose-300/35 bg-rose-400/10 px-5 text-sm font-bold text-rose-100 transition hover:border-rose-200/65 hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <Square size={16} fill="currentColor" />
+                {labels.stop}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <div>
@@ -99,11 +134,6 @@ export function ConversionPanel({ status, canStart, progress, steps, labels, com
             <span className="text-sm font-medium">{step.label}</span>
           </div>
         ))}
-      </div>
-
-      <div className="rounded-2xl border border-white/10 bg-slate-950/55 p-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{labels.command}</p>
-        <p className="mt-3 break-all font-mono text-xs leading-6 text-slate-300">{commandPreview || "python -m km_data_converter run-full ..."}</p>
       </div>
     </section>
   );

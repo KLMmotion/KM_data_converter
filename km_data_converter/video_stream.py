@@ -6,6 +6,7 @@ import fractions
 import av
 import numpy as np
 
+KEYFRAME_INTERVAL_SECONDS = 1.5
 
 def pick_video_path(video_dir: Path) -> list[Path]:
     left_eye = video_dir / "left_eye.mp4"
@@ -38,13 +39,19 @@ def get_video_stream_samples(video_path: Path) -> tuple[str, list[bytes], np.nda
         else:
             fps = fractions.Fraction(30, 1)
 
+        keyframe_interval = max(1, int(round(float(fps) * KEYFRAME_INTERVAL_SECONDS)))
         codec.framerate = fps
         codec.time_base = fractions.Fraction(1, int(fps))
+        codec.gop_size = keyframe_interval
+        codec.max_b_frames = 0
         codec.options = {
             "preset": "veryfast",
             "tune": "zerolatency",
             "bf": "0",
-            "g": "30",
+            "g": str(keyframe_interval),
+            "keyint_min": str(keyframe_interval),
+            "sc_threshold": "0",
+            "x264-params": f"keyint={keyframe_interval}:min-keyint={keyframe_interval}:scenecut=0",
         }
         codec.open()
 
