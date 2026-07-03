@@ -1,9 +1,7 @@
-# Python
+# Python caches/build output
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.egg-info/
+*$py.class
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -11,31 +9,32 @@ __pycache__/
 htmlcov/
 build/
 dist/
+*.egg-info/
 
-# Node / Electron / Vite
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Node/Vite/Electron
 node_modules/
 dist/
 dist-electron/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+.vite/
+*.tsbuildinfo
 
-# Generated conversion outputs and local datasets
+# Local generated conversion output
 .generated/
-generated/
 datasets/
 BAG_STORAGE/
 *.rrd
 *.mcap
+*.bag
+*.db3
 
-# OS / editor noise
+# OS/editor files
 .DS_Store
 ._*
 Thumbs.db
 .vscode/
-
-# Local environment files
-.env
-.env.*
-!.env.example

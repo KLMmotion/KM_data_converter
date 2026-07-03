@@ -9,13 +9,32 @@ import pandas as pd
 import rerun as rr
 import yaml
 
-from .video_stream import get_video_stream_samples, pick_video_path
+from .video_stream import get_video_stream_samples, load_video_stream_config, pick_video_path, resolve_video_stream_entities
 
 EndEffectorMode = str
 
 CONTROL_JOINT_CMD_PATHS = {
     "/control/joint_cmd_A",
     "/control/joint_cmd_B",
+}
+HAND_JOINT_COMMAND_PATHS = {
+    "/hand_left/joint_commands/position",
+    "/hand_right/joint_commands/position",
+}
+REQUIRED_COMMAND_PATHS = CONTROL_JOINT_CMD_PATHS | HAND_JOINT_COMMAND_PATHS
+HAND_JOINT_POSITION_PATHS = {
+    "/hand_left/joint_states/position",
+    "/hand_right/joint_states/position",
+}
+HAND_JOINT_EFFORT_PATHS = {
+    "/hand_left/joint_states/effort",
+    "/hand_right/joint_states/effort",
+}
+INFO_TO_CONTROL_STATE_ALIASES = {
+    "/info/eef_left": "/control/eef_left",
+    "/info/eef_right": "/control/eef_right",
+    "/info/gripper_feedback_L": "/control/gripper_feedback_L",
+    "/info/gripper_feedback_R": "/control/gripper_feedback_R",
 }
 
 
@@ -66,6 +85,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["gripper", "hand"],
         default="gripper",
         help="Select robot end-effector state source: gripper (default) or hand.",
+    )
+    parser.add_argument(
+        "--video-stream-config",
+        type=Path,
+        default=None,
+        help="JSON file with selected 2x2 video grid to camera role mapping.",
     )
     return parser.parse_args(argv)
 
@@ -182,10 +207,36 @@ def _pick_data_columns(columns: list[str], path: str, end_effector: EndEffectorM
             "/info/gripper_feedback_R:std_msgs.msg.Float32MultiArray:message",
             "/info/gripper_feedback_R:Scalars:scalars",
         ],
-        "/hand_left/joint_states/effort": ["/hand_left/joint_states/effort:Scalars:scalars"],
-        "/hand_left/joint_states/position": ["/hand_left/joint_states/position:Scalars:scalars"],
-        "/hand_right/joint_states/effort": ["/hand_right/joint_states/effort:Scalars:scalars"],
-        "/hand_right/joint_states/position": ["/hand_right/joint_states/position:Scalars:scalars"],
+        "/hand_left/joint_commands/position": [
+            "/hand_left/joint_commands/position:Scalars:scalars",
+            "/hand_left/joint_commands:sensor_msgs.msg.JointState:message",
+            "/hand_left/joint_commands:Scalars:scalars",
+        ],
+        "/hand_right/joint_commands/position": [
+            "/hand_right/joint_commands/position:Scalars:scalars",
+            "/hand_right/joint_commands:sensor_msgs.msg.JointState:message",
+            "/hand_right/joint_commands:Scalars:scalars",
+        ],
+        "/hand_left/joint_states/effort": [
+            "/hand_left/joint_states/effort:Scalars:scalars",
+            "/hand_left/joint_states:sensor_msgs.msg.JointState:message",
+            "/hand_left/joint_states:Scalars:scalars",
+        ],
+        "/hand_left/joint_states/position": [
+            "/hand_left/joint_states/position:Scalars:scalars",
+            "/hand_left/joint_states:sensor_msgs.msg.JointState:message",
+            "/hand_left/joint_states:Scalars:scalars",
+        ],
+        "/hand_right/joint_states/effort": [
+            "/hand_right/joint_states/effort:Scalars:scalars",
+            "/hand_right/joint_states:sensor_msgs.msg.JointState:message",
+            "/hand_right/joint_states:Scalars:scalars",
+        ],
+        "/hand_right/joint_states/position": [
+            "/hand_right/joint_states/position:Scalars:scalars",
+            "/hand_right/joint_states:sensor_msgs.msg.JointState:message",
+            "/hand_right/joint_states:Scalars:scalars",
+        ],
     }
 
     chosen = [name for name in preferences.get(path, []) if name in columns]
@@ -216,6 +267,24 @@ def _list_dynamic_component_columns(dataset, path: str) -> list[str]:
     return component_columns
 
 
+def _base_hand_joint_state_path(path: str) -> str | None:
+    if path in HAND_JOINT_POSITION_PATHS or path in HAND_JOINT_EFFORT_PATHS:
+        return path.rsplit("/", 1)[0]
+    return None
+
+
+def _hand_joint_command_position_path(path: str) -> str | None:
+    if path in HAND_JOINT_COMMAND_PATHS:
+        return path
+    return None
+
+
+def _base_hand_joint_command_path(path: str) -> str | None:
+    if path in HAND_JOINT_COMMAND_PATHS:
+        return path.rsplit("/", 1)[0]
+    return None
+
+
 def _state_source_paths(end_effector: EndEffectorMode) -> list[str]:
     base = [
         "/joint_states/effort",
@@ -230,6 +299,8 @@ def _state_source_paths(end_effector: EndEffectorMode) -> list[str]:
     if end_effector == "hand":
         return [
             *base,
+            "/hand_left/joint_commands/position",
+            "/hand_right/joint_commands/position",
             "/hand_left/joint_states/effort",
             "/hand_left/joint_states/position",
             "/hand_right/joint_states/effort",
@@ -254,6 +325,8 @@ def _target_dims(end_effector: EndEffectorMode) -> dict[str, int]:
             **control_dims,
             "/info/eef_left": 7,
             "/info/eef_right": 7,
+            "/hand_left/joint_commands/position": 20,
+            "/hand_right/joint_commands/position": 20,
             "/hand_left/joint_states/effort": 20,
             "/hand_left/joint_states/position": 20,
             "/hand_right/joint_states/effort": 20,
@@ -349,11 +422,67 @@ def _extract_joint_cmd_positions(value) -> list[float]:
     return []
 
 
+def _extract_joint_state_field(value, field_name: str) -> list[float]:
+    """Extract a named JointState array from nested Rerun/ROS message values."""
+    if value is None:
+        return []
+
+    if isinstance(value, dict):
+        for key in (field_name, f"{field_name}s"):
+            if key in value:
+                return _flatten_numeric_values(value[key])
+        if "data" in value:
+            values = _extract_joint_state_field(value["data"], field_name)
+            if values:
+                return values
+        for dict_value in value.values():
+            values = _extract_joint_state_field(dict_value, field_name)
+            if values:
+                return values
+        return []
+
+    if isinstance(value, np.ndarray):
+        if value.dtype == object:
+            for item in value.tolist():
+                values = _extract_joint_state_field(item, field_name)
+                if values:
+                    return values
+            return []
+        return _flatten_numeric_values(value)
+
+    if isinstance(value, (list, tuple)):
+        if value and all(not isinstance(item, (dict, list, tuple, np.ndarray, str)) for item in value):
+            return _flatten_numeric_values(value)
+        for item in value:
+            values = _extract_joint_state_field(item, field_name)
+            if values:
+                return values
+        return []
+
+    if isinstance(value, str):
+        field_match = re.search(rf"{field_name}s?['\"]?\s*[:=]\s*\[([^\]]*)\]", value)
+        if field_match:
+            return _flatten_numeric_values(field_match.group(1))
+        return _flatten_numeric_values(value)
+
+    return []
+
+
 def _extract_numeric_values_for_path(path: str, value) -> list[float]:
     if path in CONTROL_JOINT_CMD_PATHS:
         positions = _extract_joint_cmd_positions(value)
         if positions:
             return positions
+        return []
+    if path in HAND_JOINT_COMMAND_PATHS or path in HAND_JOINT_POSITION_PATHS:
+        positions = _extract_joint_state_field(value, "position")
+        if positions:
+            return positions
+        return []
+    if path in HAND_JOINT_EFFORT_PATHS:
+        effort = _extract_joint_state_field(value, "effort")
+        if effort:
+            return effort
         return []
 
     return _flatten_numeric_values(value)
@@ -367,8 +496,8 @@ def _infer_vector_size_from_columns(df, column_names: list[str], path: str) -> i
             flat_values.extend(_extract_numeric_values_for_path(path, value))
         max_size = max(max_size, len(flat_values))
 
-    if path in CONTROL_JOINT_CMD_PATHS and max_size == 0:
-        raise ValueError(f"Could not parse positions from control joint command topic '{path}'.")
+    if path in REQUIRED_COMMAND_PATHS and max_size == 0:
+        raise ValueError(f"Could not parse positions from command topic '{path}'.")
 
     return max(1, max_size)
 
@@ -380,7 +509,7 @@ def _fill_missing_vectors_with_nearest(
 ) -> np.ndarray:
     valid_indices = [index for index, vector in enumerate(vectors) if vector is not None]
     if not valid_indices:
-        raise ValueError(f"Could not find any valid values to fill control joint command topic '{path}'.")
+        raise ValueError(f"Could not find any valid values to fill command topic '{path}'.")
 
     valid_index_array = np.asarray(valid_indices, dtype=np.int64)
     filled_vectors: list[np.ndarray] = []
@@ -401,7 +530,7 @@ def _fill_missing_vectors_with_nearest(
         nearest_index = min(candidate_indices, key=lambda candidate: (abs(candidate - index), candidate))
         nearest_vector = vectors[nearest_index]
         if nearest_vector is None:
-            raise ValueError(f"Nearest fill failed for control joint command topic '{path}' at row {index}.")
+            raise ValueError(f"Nearest fill failed for command topic '{path}' at row {index}.")
 
         filled_vectors.append(nearest_vector.copy())
 
@@ -416,7 +545,7 @@ def _build_vectors_from_columns(df, column_names: list[str], vector_size: int, p
             flat_values.extend(_extract_numeric_values_for_path(path, value))
 
         arr = np.array(flat_values, dtype=np.float32)
-        if arr.size == 0 and path in CONTROL_JOINT_CMD_PATHS:
+        if arr.size == 0 and path in REQUIRED_COMMAND_PATHS:
             vectors.append(None)
             continue
 
@@ -426,7 +555,7 @@ def _build_vectors_from_columns(df, column_names: list[str], vector_size: int, p
             vec[:copy_size] = arr[:copy_size]
         vectors.append(vec)
 
-    if path in CONTROL_JOINT_CMD_PATHS:
+    if path in REQUIRED_COMMAND_PATHS:
         return _fill_missing_vectors_with_nearest(vectors, vector_size=vector_size, path=path)
 
     return np.stack(vectors, axis=0)
@@ -504,6 +633,7 @@ def convert_bag_video_to_rrd(
     output_rrd_path: Path,
     dataset_dir: Path,
     end_effector: EndEffectorMode,
+    video_stream_config: dict[str, list[dict[str, str]]] | None = None,
 ) -> Path:
     sample_data_path = dataset_dir / "mcap_to_rrd" / bag_dir.name
     video_dir = bag_dir / "video"
@@ -517,9 +647,10 @@ def convert_bag_video_to_rrd(
         raise FileNotFoundError(f"Missing camera yaml: {camera_yaml_path}")
 
     first_frame_epoch_ns = _read_first_frame_epoch_ns(camera_yaml_path)
-    video_paths = pick_video_path(video_dir)
+    video_entities = resolve_video_stream_entities(video_stream_config)
+    video_paths = pick_video_path(video_dir, video_stream_config)
 
-    camera_names = ["left_eye", "right_eye", "left_wrist", "right_wrist"]
+    camera_names = [item["role"] for item in video_entities]
     if len(video_paths) != len(camera_names):
         raise ValueError(f"Expected {len(camera_names)} camera videos, got {len(video_paths)}: {video_paths}")
 
@@ -536,14 +667,15 @@ def convert_bag_video_to_rrd(
             "timestamps": video_sample_timestamps,
         }
 
-    video_sample_timestamps = np.asarray(camera_streams["left_eye"]["timestamps"])
+    reference_camera = camera_names[0]
+    video_sample_timestamps = np.asarray(camera_streams[reference_camera]["timestamps"])
 
     for camera_name, stream in camera_streams.items():
         camera_timestamps = np.asarray(stream["timestamps"])
         if len(camera_timestamps) != len(video_sample_timestamps):
             raise ValueError(
                 "Length mismatch across camera streams: "
-                f"left_eye={len(video_sample_timestamps)} vs {camera_name}={len(camera_timestamps)}"
+                f"{reference_camera}={len(video_sample_timestamps)} vs {camera_name}={len(camera_timestamps)}"
             )
 
     server = rr.server.Server(datasets={"data": sample_data_path})
@@ -558,7 +690,29 @@ def convert_bag_video_to_rrd(
     zero_filled_paths: set[str] = set()
 
     for path in source_paths:
-        available_columns = _list_dynamic_component_columns(dataset, path)
+        reader_path = path
+        command_position_path = _hand_joint_command_position_path(path)
+        if command_position_path is not None:
+            position_columns = _list_dynamic_component_columns(dataset, command_position_path)
+            if position_columns:
+                reader_path = command_position_path
+                available_columns = position_columns
+            else:
+                base_command_path = _base_hand_joint_command_path(path)
+                if base_command_path is not None:
+                    reader_path = base_command_path
+                    available_columns = _list_dynamic_component_columns(dataset, base_command_path)
+                else:
+                    available_columns = _list_dynamic_component_columns(dataset, path)
+        else:
+            available_columns = _list_dynamic_component_columns(dataset, path)
+        if not available_columns:
+            base_hand_path = _base_hand_joint_state_path(path)
+            if base_hand_path is not None:
+                base_columns = _list_dynamic_component_columns(dataset, base_hand_path)
+                if base_columns:
+                    reader_path = base_hand_path
+                    available_columns = base_columns
         try:
             selected_columns = _pick_data_columns(available_columns, path, end_effector=end_effector)
         except KeyError:
@@ -571,7 +725,7 @@ def convert_bag_video_to_rrd(
                 continue
             raise
 
-        path_reader, index_name = _read_with_index_fallback(dataset, [path], video_sample_timestamps)
+        path_reader, index_name = _read_with_index_fallback(dataset, [reader_path], video_sample_timestamps)
         path_df = path_reader.select(index_name, *selected_columns).to_arrow_table().to_pandas()
         path_df = _align_reader_dataframe_rows(path_df, video_sample_timestamps, index_name)
 
@@ -630,6 +784,15 @@ def convert_bag_video_to_rrd(
             columns=[*rr.Scalars.columns(scalars=joint_values_by_path[path])],
         )
 
+    for info_path, control_path in INFO_TO_CONTROL_STATE_ALIASES.items():
+        if info_path not in joint_values_by_path:
+            continue
+        rec.send_columns(
+            control_path,
+            indexes=[time_column],
+            columns=[*rr.Scalars.columns(scalars=joint_values_by_path[info_path])],
+        )
+
     output_rrd_path.parent.mkdir(parents=True, exist_ok=True)
     rec.save(str(output_rrd_path))
     return output_rrd_path
@@ -641,6 +804,7 @@ def convert_bag_storage_video_to_rrd(
     dataset_dir: Path,
     end_effector: EndEffectorMode,
     strict: bool = False,
+    video_stream_config: dict[str, list[dict[str, str]]] | None = None,
 ) -> tuple[list[Path], int]:
     bag_dirs = _list_bag_dirs(bag_storage)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -657,6 +821,7 @@ def convert_bag_storage_video_to_rrd(
                     output_rrd_path,
                     dataset_dir=dataset_dir,
                     end_effector=end_effector,
+                    video_stream_config=video_stream_config,
                 )
             )
         except Exception as exc:
@@ -676,6 +841,7 @@ def main(argv: list[str] | None = None) -> None:
     bag_storage = _resolve_bag_storage(args)
     dataset_dir = _resolve_dataset_dir(args, bag_storage)
     output_dir = _resolve_output_dir(args, bag_storage)
+    video_stream_config = load_video_stream_config(args.video_stream_config)
 
     exported_paths, fail_count = convert_bag_storage_video_to_rrd(
         bag_storage=bag_storage,
@@ -683,6 +849,7 @@ def main(argv: list[str] | None = None) -> None:
         dataset_dir=dataset_dir,
         end_effector=args.end_effector,
         strict=args.strict,
+        video_stream_config=video_stream_config,
     )
     print(f"Saved video-enriched RRDs in: {output_dir}")
     print(f"Using source mcap2rrd dataset dir: {dataset_dir}")

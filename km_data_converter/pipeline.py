@@ -7,6 +7,7 @@ import shutil
 from .mcap_to_rrd import convert_bag_storage_to_rrd
 from .rrd_to_lerobot import convert_rrds_to_lerobot
 from .split_video import find_cameras_videos, split_cameras_video
+from .video_stream import load_video_stream_config
 from .video_to_rrd import convert_bag_storage_video_to_rrd
 
 
@@ -42,7 +43,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="split_target_fps",
         type=float,
         default=10.0,
-        help="Target FPS for splitting each tiled cameras.mp4 into four camera videos.",
+        help="Target FPS for splitting each tiled cameras.mp4 into configured camera videos.",
     )
     parser.add_argument(
         "--output-dir",
@@ -93,6 +94,35 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--lerobot-schema-config",
+        type=Path,
+        default=None,
+        help="JSON file with configurable LeRobot action/observation topic lists.",
+    )
+    parser.add_argument(
+        "--video-stream-config",
+        type=Path,
+        default=None,
+        help="JSON file with selected 2x2 video grid to camera role mapping.",
+    )
+    parser.add_argument(
+        "--action-topics",
+        type=str,
+        default=None,
+        help="Comma-separated action topic list. Overrides schema config action.",
+    )
+    parser.add_argument(
+        "--observation-topics",
+        type=str,
+        default=None,
+        help="Comma-separated observation.state topic list. Overrides schema config observation.",
+    )
+    parser.add_argument(
+        "--legacy-hand-mode",
+        action="store_true",
+        help="Use the old end-effector hand/gripper schema. Default uses the new 30-dim schema.",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="Fail on first bad bag while running mcap2rrd/video2rrd steps.",
@@ -137,7 +167,12 @@ def _resolve_output_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     return mcap2rrd_dir, video2rrd_dir, lerobot_output
 
 
-def _split_all_videos(bag_storage: Path, target_fps: float, strict: bool) -> tuple[int, int]:
+def _split_all_videos(
+    bag_storage: Path,
+    target_fps: float,
+    strict: bool,
+    video_stream_config: dict[str, list[dict[str, str]]] | None = None,
+) -> tuple[int, int]:
     if not bag_storage.exists():
         raise FileNotFoundError(f"bag storage does not exist: {bag_storage}")
 
@@ -149,7 +184,11 @@ def _split_all_videos(bag_storage: Path, target_fps: float, strict: bool) -> tup
     fail_count = 0
 
     for video_path in videos:
-        ok = split_cameras_video(video_path, target_fps=target_fps)
+        ok = split_cameras_video(
+            video_path,
+            target_fps=target_fps,
+            video_stream_config=video_stream_config,
+        )
         if ok:
             success_count += 1
             continue
@@ -221,12 +260,14 @@ def main(argv: list[str] | None = None) -> None:
     bag_storage = _resolve_bag_storage(args)
     mcap2rrd_dir, video2rrd_dir, lerobot_output_base = _resolve_output_paths(args)
     lerobot_output = _resolve_lerobot_output(bag_storage, lerobot_output_base)
+    video_stream_config = load_video_stream_config(args.video_stream_config)
 
-    print("[1/4] Splitting tiled cameras.mp4 into four camera videos ...")
+    print("[1/4] Splitting tiled cameras.mp4 into configured camera videos ...")
     split_success, split_fail = _split_all_videos(
         bag_storage=bag_storage,
         target_fps=args.split_target_fps,
         strict=args.strict,
+        video_stream_config=video_stream_config,
     )
     print(
         "[1/4] Done. "
@@ -252,6 +293,7 @@ def main(argv: list[str] | None = None) -> None:
         dataset_dir=mcap2rrd_dir,
         end_effector=args.end_effector,
         strict=args.strict,
+        video_stream_config=video_stream_config,
     )
     print(f"[3/4] Done. Exported={len(video_paths)}, skipped={video_fail}, dir={video2rrd_dir}")
 
@@ -265,6 +307,11 @@ def main(argv: list[str] | None = None) -> None:
         repo_id=args.repo_id,
         end_effector=args.end_effector,
         task_description=args.task_description,
+        lerobot_schema_config=args.lerobot_schema_config,
+        video_stream_config=video_stream_config,
+        action_topics=args.action_topics,
+        observation_topics=args.observation_topics,
+        legacy_hand_mode=args.legacy_hand_mode,
     )
 
     from .recompute_stats import DEFAULT_SAMPLE_RATIO, recompute_image_stats_file

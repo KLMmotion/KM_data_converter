@@ -6,6 +6,37 @@ type EndEffectorMode = "gripper" | "hand";
 type LogLevel = "stdout" | "stderr" | "system";
 type DirectoryKind = "source" | "output" | "dataset";
 type RerunSelectKind = "file" | "directory";
+type VideoGrid = "top_left" | "top_right" | "bottom_left" | "bottom_right";
+type VideoRole = "left_eye" | "right_eye" | "left_wrist" | "right_wrist";
+type SchemaTopic =
+  | "/joint_states/effort_L"
+  | "/joint_states/effort_R"
+  | "/joint_states/position_L"
+  | "/joint_states/position_R"
+  | "/joint_states/velocity_L"
+  | "/joint_states/velocity_R"
+  | "/control/joint_cmd_A"
+  | "/control/joint_cmd_B"
+  | "eef_left"
+  | "eef_right"
+  | "gripper_feedback_L"
+  | "gripper_feedback_R"
+  | "/hand_left/joint_commands/position"
+  | "/hand_right/joint_commands/position"
+  | "/hand_left/joint_states/position"
+  | "/hand_right/joint_states/position"
+  | "/hand_left/joint_states/effort"
+  | "/hand_right/joint_states/effort";
+
+interface LeRobotSchemaConfig {
+  action: SchemaTopic[];
+  observation: SchemaTopic[];
+}
+
+interface VideoStreamMappingItem {
+  grid: VideoGrid;
+  role: VideoRole;
+}
 
 interface ConversionConfig {
   sourcePath: string;
@@ -13,6 +44,8 @@ interface ConversionConfig {
   fps: number;
   repoId: string;
   endEffector: EndEffectorMode;
+  schemaConfig: LeRobotSchemaConfig;
+  videoStreams: VideoStreamMappingItem[];
   taskDescription?: string;
   strict: boolean;
 }
@@ -40,6 +73,8 @@ interface ConversionStarted {
     mcap2rrdDir: string;
     video2rrdDir: string;
     lerobotOutputBase: string;
+    schemaConfigPath?: string;
+    videoStreamConfigPath?: string;
     commandPreview: string;
   };
 }
@@ -52,6 +87,17 @@ interface ConversionExit {
 interface ConversionControlResult {
   ok: boolean;
   paused?: boolean;
+  message?: string;
+}
+
+interface ExportLogsRequest {
+  outputPath: string;
+  logs: LogEvent[];
+}
+
+interface ExportLogsResult {
+  ok: boolean;
+  filePath?: string;
   message?: string;
 }
 
@@ -106,6 +152,7 @@ interface KernelMindApi {
   selectDirectory: (kind: DirectoryKind) => Promise<string | null>;
   validatePath: (path: string, kind: DirectoryKind) => Promise<PathValidation>;
   runConversion: (config: ConversionConfig) => Promise<ConversionStarted>;
+  exportLogs: (request: ExportLogsRequest) => Promise<ExportLogsResult>;
   pauseConversion: () => Promise<ConversionControlResult>;
   resumeConversion: () => Promise<ConversionControlResult>;
   stopConversion: () => Promise<ConversionControlResult>;

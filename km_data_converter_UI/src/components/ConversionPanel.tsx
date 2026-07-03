@@ -56,16 +56,16 @@ export function ConversionPanel({ status, canStart, isPaused, isControlling, pro
   const isRunning = status === "running";
 
   return (
-    <section className="flex h-full flex-col space-y-6 rounded-3xl border border-white/10 bg-white/[0.08] p-6 shadow-panel backdrop-blur-xl">
+    <section className="flex flex-col space-y-6 rounded-3xl border border-white/10 bg-white/[0.08] p-6 shadow-panel backdrop-blur-xl">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-200/80">{labels.title}</p>
-          <div className={`mt-3 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold ${statusClasses[status]}`}>
+          <div className={`mt-3 inline-flex items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-semibold ${statusClasses[status]}`}>
             <Activity size={15} className={isRunning && !isPaused ? "animate-pulse" : ""} />
             {statusLabel(status, labels, isPaused)}
           </div>
         </div>
-        <div className="flex flex-wrap justify-end gap-3">
+        <div className={!isRunning ? "flex justify-end" : "grid w-40 shrink-0 grid-cols-1 gap-2"}>
           {!isRunning ? (
             <button
               type="button"
@@ -82,7 +82,7 @@ export function ConversionPanel({ status, canStart, isPaused, isControlling, pro
                 type="button"
                 disabled={isControlling}
                 onClick={isPaused ? onResume : onPause}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-cyan-200/30 bg-cyan-200/10 px-5 text-sm font-bold text-cyan-50 transition hover:border-cyan-100/60 hover:bg-cyan-200/18 disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-cyan-200/30 bg-cyan-200/10 px-3 text-sm font-bold text-cyan-50 transition hover:border-cyan-100/60 hover:bg-cyan-200/18 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {isControlling ? <Loader2 size={17} className="animate-spin" /> : isPaused ? <Play size={17} fill="currentColor" /> : <Pause size={17} fill="currentColor" />}
                 {isPaused ? labels.resume : labels.pause}
@@ -91,7 +91,7 @@ export function ConversionPanel({ status, canStart, isPaused, isControlling, pro
                 type="button"
                 disabled={isControlling}
                 onClick={onStop}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-rose-300/35 bg-rose-400/10 px-5 text-sm font-bold text-rose-100 transition hover:border-rose-200/65 hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-rose-300/35 bg-rose-400/10 px-3 text-sm font-bold text-rose-100 transition hover:border-rose-200/65 hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <Square size={16} fill="currentColor" />
                 {labels.stop}

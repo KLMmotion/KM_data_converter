@@ -17,7 +17,7 @@ def _print_help() -> None:
     print("")
     print("Commands:")
     print("  run-full       Run full pipeline: split -> mcap2rrd -> video2rrd -> lerobot")
-    print("  split-video    Split tiled cameras.mp4 into four camera videos")
+    print("  split-video    Split tiled cameras.mp4 into configured camera videos")
     print("  mcap-to-rrd    Export MCAP files to per-episode RRD")
     print("  video-to-rrd   Merge split videos with robot state into RRD")
     print("  rrd-to-lerobot Export video2rrd files to a LeRobot dataset")

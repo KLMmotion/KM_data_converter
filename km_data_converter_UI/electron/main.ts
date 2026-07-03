@@ -82,6 +82,80 @@ function commandPreview(command: string, args: string[]) {
   return [command, ...args.map(quoteArg)].join(" ");
 }
 
+function timestampForFilename(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
+
+function formatLogsForExport(logs: LogEvent[]) {
+  return logs.map((log) => `[${log.timestamp}] [${log.level}] ${log.message}`).join("").trimEnd() + "\n";
+}
+
+function exportLogs(request: ExportLogsRequest): ExportLogsResult {
+  const outputPath = request.outputPath.trim();
+  if (!outputPath) {
+    return { ok: false, message: "Output path is required before exporting logs." };
+  }
+  if (!Array.isArray(request.logs) || request.logs.length === 0) {
+    return { ok: false, message: "No logs to export." };
+  }
+
+  const targetDir = path.normalize(outputPath);
+  fs.mkdirSync(targetDir, { recursive: true });
+  const filePath = path.join(targetDir, `conversion_logs_${timestampForFilename()}.txt`);
+  fs.writeFileSync(filePath, formatLogsForExport(request.logs), "utf8");
+  return { ok: true, filePath };
+}
+
+function writeSchemaConfig(config: ConversionConfig, paths: ReturnType<typeof outputBaseToPipelinePaths>) {
+  const schema = config.schemaConfig;
+  if (!schema || !Array.isArray(schema.action) || !Array.isArray(schema.observation)) {
+    throw new Error("LeRobot schema config is missing action or observation topics.");
+  }
+  if (schema.action.length === 0 || schema.observation.length === 0) {
+    throw new Error("LeRobot schema action and observation must both contain at least one topic.");
+  }
+
+  fs.mkdirSync(paths.outputRoot, { recursive: true });
+  const schemaConfigPath = path.join(paths.outputRoot, "lerobot_schema.json");
+  fs.writeFileSync(schemaConfigPath, `${JSON.stringify(schema, null, 2)}\n`, "utf8");
+  return schemaConfigPath;
+}
+
+function writeVideoStreamConfig(config: ConversionConfig, paths: ReturnType<typeof outputBaseToPipelinePaths>) {
+  const streams = config.videoStreams;
+  if (!Array.isArray(streams) || streams.length === 0) {
+    throw new Error("Video stream mapping must contain at least one selected stream.");
+  }
+
+  const validGrids = new Set(["top_left", "top_right", "bottom_left", "bottom_right"]);
+  const validRoles = new Set(["left_eye", "right_eye", "left_wrist", "right_wrist"]);
+  const seenGrids = new Set<string>();
+  const seenRoles = new Set<string>();
+
+  for (const stream of streams) {
+    if (!validGrids.has(stream.grid)) {
+      throw new Error(`Invalid video grid: ${stream.grid}`);
+    }
+    if (!validRoles.has(stream.role)) {
+      throw new Error(`Invalid video role: ${stream.role}`);
+    }
+    if (seenGrids.has(stream.grid)) {
+      throw new Error(`Duplicate video grid: ${stream.grid}`);
+    }
+    if (seenRoles.has(stream.role)) {
+      throw new Error(`Duplicate video role: ${stream.role}`);
+    }
+    seenGrids.add(stream.grid);
+    seenRoles.add(stream.role);
+  }
+
+  fs.mkdirSync(paths.outputRoot, { recursive: true });
+  const videoStreamConfigPath = path.join(paths.outputRoot, "video_stream_config.json");
+  fs.writeFileSync(videoStreamConfigPath, `${JSON.stringify({ video_streams: streams }, null, 2)}\n`, "utf8");
+  return videoStreamConfigPath;
+}
+
 function execFileAsync(file: string, args: string[]) {
   return new Promise<void>((resolve, reject) => {
     execFile(file, args, { windowsHide: true }, (error) => {
@@ -607,6 +681,8 @@ function validatePath(targetPath: string, kind: DirectoryKind): PathValidation {
 
 function buildConversionCommand(config: ConversionConfig) {
   const paths = outputBaseToPipelinePaths(config.outputPath);
+  const schemaConfigPath = writeSchemaConfig(config, paths);
+  const videoStreamConfigPath = writeVideoStreamConfig(config, paths);
   const args = [
     "-u",
     "-m",
@@ -625,7 +701,11 @@ function buildConversionCommand(config: ConversionConfig) {
     "--repo-id",
     config.repoId || "rerun/droid_lerobot_full",
     "--end-effector",
-    config.endEffector
+    config.endEffector,
+    "--lerobot-schema-config",
+    schemaConfigPath,
+    "--video-stream-config",
+    videoStreamConfigPath
   ];
 
   const taskDescription = config.taskDescription?.trim();
@@ -639,12 +719,17 @@ function buildConversionCommand(config: ConversionConfig) {
   return {
     command: "python",
     args,
-    paths
+    paths: {
+      ...paths,
+      schemaConfigPath,
+      videoStreamConfigPath
+    }
   };
 }
 
 ipcMain.handle("dialog:select-directory", (_, kind: DirectoryKind) => selectDirectory(kind));
 ipcMain.handle("path:validate", (_, targetPath: string, kind: DirectoryKind) => validatePath(targetPath, kind));
+ipcMain.handle("logs:export", (_, request: ExportLogsRequest) => exportLogs(request));
 
 ipcMain.handle("conversion:run", (_, config: ConversionConfig): ConversionStarted => {
   if (activeConversion) {
@@ -663,7 +748,13 @@ ipcMain.handle("conversion:run", (_, config: ConversionConfig): ConversionStarte
   }
 
   const repoRoot = getRepoRoot();
-  const { command, args, paths } = buildConversionCommand(config);
+  let commandConfig: ReturnType<typeof buildConversionCommand>;
+  try {
+    commandConfig = buildConversionCommand(config);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Failed to prepare conversion command." };
+  }
+  const { command, args, paths } = commandConfig;
   const preview = commandPreview(command, args);
 
   sendLog("system", `cwd: ${repoRoot}`);
@@ -703,6 +794,8 @@ ipcMain.handle("conversion:run", (_, config: ConversionConfig): ConversionStarte
       mcap2rrdDir: paths.mcap2rrdDir,
       video2rrdDir: paths.video2rrdDir,
       lerobotOutputBase: paths.lerobotOutputBase,
+      schemaConfigPath: paths.schemaConfigPath,
+      videoStreamConfigPath: paths.videoStreamConfigPath,
       commandPreview: preview
     }
   };

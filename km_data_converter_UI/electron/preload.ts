@@ -4,6 +4,7 @@ const api = {
   selectDirectory: (kind: DirectoryKind) => ipcRenderer.invoke("dialog:select-directory", kind),
   validatePath: (path: string, kind: DirectoryKind) => ipcRenderer.invoke("path:validate", path, kind),
   runConversion: (config: ConversionConfig) => ipcRenderer.invoke("conversion:run", config),
+  exportLogs: (request: ExportLogsRequest) => ipcRenderer.invoke("logs:export", request),
   pauseConversion: () => ipcRenderer.invoke("conversion:pause"),
   resumeConversion: () => ipcRenderer.invoke("conversion:resume"),
   stopConversion: () => ipcRenderer.invoke("conversion:stop"),
