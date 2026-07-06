@@ -59,8 +59,12 @@ pip install -e .\examples\python\rerun_export
 ```powershell
 cd .\km_data_converter_UI
 npm install
+npm run build
 npm run dev
 ```
+
+执行 `npm install` 自动生成`node_modules/`；
+执行 `npm run build` 自动生成`dist/` 和 `dist-electron/`。
 
 界面启动后会打开 `KernelMind Data Converter` 窗口。
 

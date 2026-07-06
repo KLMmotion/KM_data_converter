@@ -59,9 +59,12 @@ The desktop app is located in `km_data_converter_UI` and uses Electron + Vite + 
 ```powershell
 cd .\km_data_converter_UI
 npm install
+npm run build
 npm run dev
 ```
 
+`node_modules/` is created by `npm install`. `dist/`.
+`dist-electron/` are build outputs created by commands such as `npm run build`. 
 After startup, the UI opens the `KernelMind Data Converter` window.
 
 ## 5-Step Frontend Workflow
