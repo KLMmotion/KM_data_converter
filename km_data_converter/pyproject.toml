@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "km-data-converter"
+version = "0.1.0"
+description = "Convert BAG_STORAGE recordings to LeRobot datasets via MCAP/RRD pipeline."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "numpy",
+  "pandas",
+  "av",
+  "opencv-python",
+  "pyyaml",
+  "rerun-sdk",
+  "lerobot==0.4.2",
+  "pyarrow",
+  "datafusion",
+  "pillow",
+  "scipy",
+  "tqdm",
+]
+
+[project.scripts]
+km-data-converter = "km_data_converter.__main__:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["km_data_converter*"]
+exclude = ["datasets*", "BAG_STORAGE*", "examples*", "__pycache__*"]
